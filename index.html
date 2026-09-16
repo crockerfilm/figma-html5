@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Figma → HTML5 Ad Converter</title>
+<style>
+  :root {
+    --bg: #0d0f14; --panel: #151923; --panel-2: #1c2130; --line: #262c3b;
+    --text: #e6e9f0; --muted: #8b93a7; --accent: #5b8cff;
+    --ok: #3ecf8e; --fix: #5b8cff; --warn: #f5a623; --block: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px; margin-bottom: 18px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 0 0 14px; }
+  #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 44px 24px;
+    text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+  #drop.over { border-color: var(--accent); background: rgba(91,140,255,.07); }
+  #drop.busy { opacity: .6; pointer-events: none; }
+  #drop strong { display: block; font-size: 16px; margin-bottom: 6px; }
+  #drop span { color: var(--muted); }
+  .hidden { display: none !important; }
+
+  .verdict { display: flex; align-items: center; gap: 14px; padding: 16px 18px;
+    border-radius: 9px; margin-bottom: 18px; border: 1px solid var(--line); }
+  .verdict.ok { background: rgba(62,207,142,.09); border-color: rgba(62,207,142,.35); }
+  .verdict.no { background: rgba(255,92,92,.09); border-color: rgba(255,92,92,.35); }
+  .verdict b { font-size: 16px; display: block; }
+  .verdict p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+
+  .rule { display: flex; gap: 11px; padding: 11px 0; border-top: 1px solid var(--line); }
+  .rule:first-child { border-top: 0; }
+  .tag { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .05em;
+    padding: 2px 7px; border-radius: 4px; margin-top: 2px; min-width: 52px; text-align: center; }
+  .tag.pass  { background: rgba(62,207,142,.15); color: var(--ok); }
+  .tag.fixed { background: rgba(91,140,255,.15); color: var(--fix); }
+  .tag.block { background: rgba(255,92,92,.15); color: var(--block); }
+  .tag.info  { background: rgba(139,147,167,.15); color: var(--muted); }
+  .rule b { font-weight: 600; }
+  .rule p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  .rule .todo { color: var(--text); background: var(--panel-2); border-left: 2px solid var(--block);
+    padding: 7px 10px; border-radius: 0 5px 5px 0; margin-top: 7px; font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .save { color: var(--ok); }
+
+  .previewWrap { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
+  #previewBox { width: 300px; height: 300px; border: 1px solid var(--line);
+    border-radius: 8px; overflow: hidden; background: #000; position: relative; flex: none; }
+  #previewBox iframe { border: 0; position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 7px;
+    padding: 11px 20px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  input[type=text] { width: 100%; background: var(--panel-2); border: 1px solid var(--line);
+    color: var(--text); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 13px; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .specline { color: var(--muted); font-size: 12px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Figma → HTML5 Ad Converter</h1>
+  <p class="sub">Drop an animated SVG from Figma. It is checked against spec, fixed where a fix is deterministic, and flagged where a human has to change something.</p>
+
+  <div class="panel">
+    <div id="drop">
+      <strong>Drop SVG here</strong>
+      <span>or click to choose a file</span>
+      <input type="file" id="file" accept=".svg,image/svg+xml" class="hidden">
+    </div>
+    <p class="specline" id="specline"></p>
+  </div>
+
+  <div id="report" class="hidden">
+    <div id="verdict"></div>
+    <div class="panel">
+      <h2>Spec checks</h2>
+      <div id="rules"></div>
+    </div>
+    <div class="panel" id="sizePanel">
+      <h2>Package</h2>
+      <table id="sizeTable"></table>
+    </div>
+    <div class="panel">
+      <h2>Output</h2>
+      <div class="previewWrap">
+        <div id="previewBox"></div>
+        <div style="flex:1;min-width:240px">
+          <label>Creative name</label>
+          <input type="text" id="adName">
+          <div class="row" style="margin-top:12px">
+            <button id="dlZip">Download .zip</button>
+            <button id="again" class="ghost">Start over</button>
+          </div>
+          <p class="specline" id="outNote"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================================
+ * SPEC
+ * Seeded from a reference banner that passed its platform's spec checker:
+ *   zip 68.5 KB · unzipped 261 KB · 12s animation · every animation 1 iteration
+ *   + forwards (zero `infinite`) · raster background delivered as JPEG.
+ * Size caps below are the IAB-standard envelope that reference sits inside.
+ * Change these numbers if a placement is briefed differently — nothing else
+ * in this file needs to change.
+ * ========================================================================== */
+const SPEC = {
+  maxZipKB: 150,
+  maxUnzippedKB: 300,
+  maxAnimationSeconds: 15,
+  holdOnLastFrame: true,       // animation must stop, not loop forever
+  requireOutlinedText: true,   // no font dependency at render time
+  allowExternalRefs: false,    // creative must be self-contained
+  // Deterministic reduction ladder, walked in order until the package fits.
+  // maxEdge is a multiple of the canvas's longest edge; nothing is ever upscaled.
+  ladder: [
+    { maxEdge: 2.00, quality: 0.85 },
+    { maxEdge: 1.50, quality: 0.82 },
+    { maxEdge: 1.25, quality: 0.78 },
+    { maxEdge: 1.00, quality: 0.75 },
+    { maxEdge: 0.85, quality: 0.70 },
+    { maxEdge: 0.70, quality: 0.65 },
+    { maxEdge: 0.55, quality: 0.60 },
+    { maxEdge: 0.45, quality: 0.55 }
+  ]
+};
+
+const $ = id => document.getElementById(id);
+const kb = n => (n / 1024).toFixed(1) + " KB";
+const fmt = n => n >= 1048576 ? (n / 1048576).toFixed(2) + " MB" : kb(n);
+const XLINK = "http://www.w3.org/1999/xlink";
+
+let built = null;
+
+/* ---------------------------------------------------------------- zip ---- */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(u8) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+async function deflateRaw(u8) {
+  const s = new Blob([u8]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  return new Uint8Array(await new Response(s).arrayBuffer());
+}
+async function makeZip(files) {
+  const enc = new TextEncoder();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name);
+    const crc = crc32(f.data);
+    const def = await deflateRaw(f.data);
+    const useDef = def.length < f.data.length;
+    const body = useDef ? def : f.data;
+    const lh = new Uint8Array(30), lv = new DataView(lh.buffer);
+    lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true);
+    lv.setUint16(8, useDef ? 8 : 0, true); lv.setUint16(12, 0x2821, true);
+    lv.setUint32(14, crc, true); lv.setUint32(18, body.length, true);
+    lv.setUint32(22, f.data.length, true); lv.setUint16(26, name.length, true);
+    parts.push(lh, name, body);
+    const ch = new Uint8Array(46), cv = new DataView(ch.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+    cv.setUint16(10, useDef ? 8 : 0, true); cv.setUint16(14, 0x2821, true);
+    cv.setUint32(16, crc, true); cv.setUint32(20, body.length, true);
+    cv.setUint32(24, f.data.length, true); cv.setUint16(28, name.length, true);
+    cv.setUint32(42, offset, true);
+    central.push(ch, name);
+    offset += 30 + name.length + body.length;
+  }
+  const cSize = central.reduce((n, p) => n + p.length, 0);
+  const e = new Uint8Array(22), ev = new DataView(e.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, files.length, true);
+  ev.setUint16(10, files.length, true); ev.setUint32(12, cSize, true); ev.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, e], { type: "application/zip" });
+}
+
+/* ------------------------------------------------------------- matrix ---- */
+const IDENTITY = [1, 0, 0, 1, 0, 0];
+function matMul(m, n) {
+  return [m[0]*n[0]+m[2]*n[1], m[1]*n[0]+m[3]*n[1], m[0]*n[2]+m[2]*n[3],
+          m[1]*n[2]+m[3]*n[3], m[0]*n[4]+m[2]*n[5]+m[4], m[1]*n[4]+m[3]*n[5]+m[5]];
+}
+function matInvert(m) {
+  const d = m[0]*m[3] - m[1]*m[2];
+  if (!d) return IDENTITY.slice();
+  return [m[3]/d, -m[1]/d, -m[2]/d, m[0]/d,
+          (m[2]*m[5]-m[3]*m[4])/d, (m[1]*m[4]-m[0]*m[5])/d];
+}
+function parseTransform(str) {
+  let m = IDENTITY.slice();
+  const re = /(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)/g;
+  let t;
+  while ((t = re.exec(str))) {
+    const v = t[2].split(/[\s,]+/).filter(x => x !== "").map(Number);
+    let n;
+    switch (t[1]) {
+      case "matrix": n = v.length === 6 ? v : IDENTITY.slice(); break;
+      case "translate": n = [1, 0, 0, 1, v[0] || 0, v[1] || 0]; break;
+      case "scale": n = [v[0] ?? 1, 0, 0, v.length > 1 ? v[1] : (v[0] ?? 1), 0, 0]; break;
+      case "rotate": {
+        const a = (v[0] || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+        const r = [c, s, -s, c, 0, 0];
+        n = v.length >= 3 ? matMul([1,0,0,1,v[1],v[2]], matMul(r, [1,0,0,1,-v[1],-v[2]])) : r;
+        break;
+      }
+      case "skewX": n = [1, 0, Math.tan((v[0]||0)*Math.PI/180), 1, 0, 0]; break;
+      case "skewY": n = [1, Math.tan((v[0]||0)*Math.PI/180), 0, 1, 0, 0]; break;
+      default: n = IDENTITY.slice();
+    }
+    m = matMul(m, n);
+  }
+  return m;
+}
+
+/* -------------------------------------------------------------- images --- */
+function loadImage(src) {
+  return new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = () => rej(new Error("could not decode an embedded image"));
+    i.src = src;
+  });
+}
+const toBlob = (c, type, q) => new Promise(r => c.toBlob(r, type, q));
+
+function drawTo(img, w, h) {
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  c.getContext("2d", { willReadFrequently: true }).drawImage(img, 0, 0, c.width, c.height);
+  return c;
+}
+
+// An image that uses its alpha channel cannot become JPEG without going black,
+// so format is decided by the pixels, not by assumption.
+function usesAlpha(img) {
+  const probe = Math.min(1200, Math.max(img.naturalWidth, img.naturalHeight));
+  const s = probe / Math.max(img.naturalWidth, img.naturalHeight);
+  const c = drawTo(img, img.naturalWidth * s, img.naturalHeight * s);
+  const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 250) return true;
+  return false;
+}
+
+/* ------------------------------------------------------------- inspect --- */
+function inspect(text) {
+  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+  if (doc.querySelector("parsererror") || !doc.querySelector("svg"))
+    throw new Error("That file isn't valid SVG.");
+  const svg = doc.querySelector("svg");
+
+  const vb = (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+  const width = parseFloat(svg.getAttribute("width")) || (vb.length === 4 ? vb[2] : 0);
+  const height = parseFloat(svg.getAttribute("height")) || (vb.length === 4 ? vb[3] : 0);
+
+  const css = [...doc.querySelectorAll("style")].map(s => s.textContent).join("\n");
+  const keyframes = (css.match(/@keyframes/g) || []).length;
+  const smil = doc.querySelectorAll("animate, animateTransform, animateMotion").length;
+
+  let cycle = 0;
+  for (const decl of css.match(/animation\s*:\s*[^;}]+/g) || []) {
+    for (const seg of decl.replace(/animation\s*:\s*/, "").split(",")) {
+      const times = seg.match(/-?[\d.]+m?s/g) || [];
+      const sec = t => t.endsWith("ms") ? parseFloat(t) / 1000 : parseFloat(t);
+      cycle = Math.max(cycle, (times[0] ? sec(times[0]) : 0) + Math.max(0, times[1] ? sec(times[1]) : 0));
+    }
+  }
+
+  const images = [];
+  for (const el of doc.querySelectorAll("image")) {
+    const href = el.getAttribute("href") || el.getAttributeNS(XLINK, "href") || "";
+    if (href.startsWith("data:")) images.push({ el, href });
+  }
+
+  const diamond = [...new Set([...doc.querySelectorAll("[data-figma-skip-parse]")].map(el => {
+    let n = el.parentElement;
+    while (n && !n.id) n = n.parentElement;
+    return n ? n.id : "(unnamed layer)";
+  }))];
+
+  return {
+    text, doc, svg, width, height, css, keyframes, smil, cycle, images, diamond,
+    infinite: /\binfinite\b/.test(css) || !!doc.querySelector('[repeatCount="indefinite"]'),
+    scripts: [...doc.querySelectorAll("script")],
+    textNodes: doc.querySelectorAll("text").length,
+    fontFace: /@font-face/.test(css),
+    foreignObject: doc.querySelectorAll("foreignObject").length,
+    externalRefs: [...new Set((text.match(/(?:href|src)\s*=\s*["'](https?:\/\/[^"']+)/g) || [])
+      .map(s => s.replace(/^.*["']/, "")))],
+    bytes: new TextEncoder().encode(text).length
+  };
+}
+
+/* ========================================================================== *
+ * RULES — each one either passes, applies a deterministic fix, or blocks with
+ * the exact change a human has to make. Order matters: blockers that make the
+ * file unusable are evaluated before anything is rewritten.
+ * ========================================================================== */
+const RULES = [
+
+  { id: "dimensions", title: "Canvas has explicit dimensions",
+    run(ctx) {
+      if (!ctx.width || !ctx.height)
+        return block("The SVG has no width/height or viewBox, so the ad size can't be determined.",
+                     "Re-export from Figma with the frame selected.");
+      return pass(`${ctx.width} × ${ctx.height}`);
+    } },
+
+  { id: "animation", title: "Creative is animated",
+    run(ctx) {
+      if (!ctx.keyframes && !ctx.smil)
+        return block("No @keyframes and no SMIL tags — this is a static export.",
+                     'In Figma\'s export panel switch from the Static tab to Animated, keep "Ignore overlapping layers" ticked, then export again.');
+      return pass(`${ctx.keyframes || ctx.smil} animation definitions, ${ctx.cycle}s cycle`);
+    } },
+
+  { id: "duration", title: `One play fits in ${SPEC.maxAnimationSeconds}s`,
+    run(ctx) {
+      if (ctx.cycle > SPEC.maxAnimationSeconds)
+        return block(`A single play runs ${ctx.cycle}s.`,
+                     `Shorten the animation in Figma to ${SPEC.maxAnimationSeconds}s or less. This can't be fixed on export without dropping frames.`);
+      return pass(ctx.cycle ? `${ctx.cycle}s per play` : "no timed animation");
+    } },
+
+  { id: "self-contained", title: "No external references",
+    run(ctx) {
+      if (!SPEC.allowExternalRefs && ctx.externalRefs.length)
+        return block(`Loads ${ctx.externalRefs.length} asset(s) from the internet: ${ctx.externalRefs.slice(0,3).join(", ")}`,
+                     "Embed these in Figma before exporting — a creative must not call out to other servers.");
+      return pass("fully self-contained");
+    } },
+
+  { id: "foreign-object", title: "No <foreignObject>",
+    run(ctx) {
+      if (ctx.foreignObject)
+        return block(`${ctx.foreignObject} <foreignObject> element(s) found.`,
+                     "These render inconsistently in ad frames. Rasterise or redraw that layer in Figma.");
+      return pass("none");
+    } },
+
+  { id: "outlined-text", title: "Text is outlined",
+    run(ctx) {
+      if (!SPEC.requireOutlinedText) return pass("not required");
+      if (ctx.textNodes || ctx.fontFace)
+        return block(`${ctx.textNodes} live <text> element(s)${ctx.fontFace ? " and an @font-face rule" : ""}.`,
+                     'Tick "Outline text" in Figma\'s export panel and export again, otherwise the ad depends on fonts that may not load.');
+      return pass("no font dependency");
+    } },
+
+  { id: "scripts", title: "No scripts in the artwork",
+    run(ctx) {
+      if (!ctx.scripts.length) return pass("none");
+      const n = ctx.scripts.length;
+      ctx.scripts.forEach(s => s.remove());
+      return fixed(`Removed ${n} <script> element(s) from the SVG.`,
+                   "Ad platforms reject scripts inside creative artwork. Nothing in a Figma export needs them.");
+    } },
+
+  { id: "diamond-gradient", title: "Gradient fills aligned to their shapes",
+    run(ctx) {
+      const repaired = [];
+      for (const b of ctx.doc.querySelectorAll("[data-figma-skip-parse]")) {
+        let anc = IDENTITY.slice();
+        const chain = [];
+        for (let n = b.parentElement; n && n.nodeName.toLowerCase() !== "svg"; n = n.parentElement) chain.unshift(n);
+        for (const el of chain) {
+          const t = el.getAttribute("transform");
+          if (t) anc = matMul(anc, parseTransform(t));
+        }
+        if (anc.every((v, i) => Math.abs(v - IDENTITY[i]) < 1e-9)) continue;
+        const inv = matInvert(anc);
+        let touched = false;
+        for (const g of b.children) {
+          const cur = g.getAttribute && g.getAttribute("transform");
+          if (!cur) continue;
+          g.setAttribute("transform", "matrix(" + matMul(inv, parseTransform(cur)).map(v => +v.toFixed(5)).join(" ") + ")");
+          touched = true;
+        }
+        if (touched) {
+          let named = b.parentElement;
+          while (named && !named.id) named = named.parentElement;
+          repaired.push(named ? named.id : "(unnamed layer)");
+        }
+      }
+      if (!repaired.length) return pass(ctx.diamond.length ? "already aligned" : "no diamond gradients");
+      return fixed(`Realigned ${repaired.length} layer(s): ${repaired.join(", ")}.`,
+                   "Figma moves these layers into local coordinates but leaves their diamond/angular gradient in canvas coordinates, which slices the artwork. The offset has been cancelled out.");
+    } },
+
+  { id: "loop", title: "Animation stops instead of looping forever",
+    run(ctx) {
+      if (!ctx.infinite) return pass("already finite");
+      if (!SPEC.holdOnLastFrame) return pass("looping allowed");
+      const loops = ctx.cycle > 0 ? Math.max(1, Math.floor(SPEC.maxAnimationSeconds / ctx.cycle)) : 1;
+      ctx.loops = loops;
+      for (const s of ctx.doc.querySelectorAll("style"))
+        s.textContent = s.textContent.replace(/\binfinite\b/g, `${loops} forwards`);
+      ctx.doc.querySelectorAll('[repeatCount="indefinite"]')
+        .forEach(el => el.setAttribute("repeatCount", String(loops)));
+      return fixed(`Capped at ${loops} play${loops === 1 ? "" : "s"} (${(loops * ctx.cycle).toFixed(1)}s), holding the last frame.`,
+                   "Figma exports a seamless infinite loop. Check the preview ends on your end card — if it ends on frame one, move the end card to the end of the timeline in Figma.");
+    } }
+];
+
+const pass  = (detail) => ({ status: "pass", detail });
+const fixed = (detail, note) => ({ status: "fixed", detail, note });
+const block = (detail, todo) => ({ status: "block", detail, todo });
+const info  = (detail) => ({ status: "info", detail });
+
+/* ------------------------------------------------------------- minify ---- */
+// Geometry only. Path coordinates are in user units, so 2 decimals is far below
+// one pixel. CSS is left alone: keyframe matrices carry scale factors like
+// 0.00499251 that do not survive rounding.
+function minifyGeometry(doc, decimals) {
+  for (const el of doc.querySelectorAll("[d], [points]")) {
+    for (const attr of ["d", "points"]) {
+      const v = el.getAttribute(attr);
+      if (v) el.setAttribute(attr, v.replace(/-?\d*\.\d+/g, n => String(+parseFloat(n).toFixed(decimals))));
+    }
+  }
+}
+
+function serialize(doc) {
+  return new XMLSerializer().serializeToString(doc.documentElement)
+    .replace(/<!--[\s\S]*?-->/g, "").replace(/>\s+</g, "><");
+}
+
+/* --------------------------------------------------- build the ad shell --- */
+function buildHtml(svgMarkup, w, h, title) {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="ad.size" content="width=${w},height=${h}">
+  <title>${title}</title>
+  <script type="text/javascript">
+    // IAB clickTag. No landing page URL is stored in this file.
+    // The ad server supplies it, either by appending ?clickTag=<encoded url>
+    // to the creative URL, or by overwriting this variable at serve time.
+    var clickTag = "";
+    (function () {
+      var q = window.location.search || "";
+      var m = /[?&]clickTag=([^&#]*)/i.exec(q);
+      if (!m || !m[1]) { return; }
+      var u = "";
+      try {
+        u = decodeURIComponent(m[1].replace(/\\+/g, "%20"));
+      } catch (e) {
+        return;
+      }
+      // Only accept http(s) so a crafted parameter cannot inject javascript:
+      if (/^https?:\\/\\//i.test(u)) { clickTag = u; }
+    })();
+  <\/script>
+  <style>
+    html, body { margin: 0; padding: 0; width: ${w}px; height: ${h}px; overflow: hidden; background: #000; }
+    #ad-root { position: relative; width: ${w}px; height: ${h}px; }
+    #ad-root > svg { display: block; width: ${w}px; height: ${h}px; }
+    #ad-clickthrough { position: absolute; top: 0; left: 0; width: ${w}px; height: ${h}px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="ad-root">
+${svgMarkup}
+    <div id="ad-clickthrough"></div>
+  </div>
+  <script type="text/javascript">
+    document.getElementById('ad-clickthrough').addEventListener('click', function () {
+      if (clickTag) { window.open(clickTag, '_blank'); }
+    });
+  <\/script>
+</body>
+</html>`;
+}
+
+/* ============================================================== pipeline == */
+async function run(file) {
+  const ctx = inspect(await file.text());
+  const results = [];
+
+  // structural rules first — a blocker here means nothing gets rewritten
+  for (const rule of RULES) {
+    const r = rule.run(ctx);
+    results.push({ rule, ...r });
+    if (r.status === "block" && ["dimensions", "animation"].includes(rule.id)) {
+      return { ctx, results, blocked: true };
+    }
+  }
+
+  const name = file.name.replace(/\.svg$/i, "");
+  const longest = Math.max(ctx.width, ctx.height);
+  const budget = SPEC.maxZipKB * 1024;
+
+  minifyGeometry(ctx.doc, 2);
+
+  // decode every embedded raster once so the ladder can re-encode cheaply
+  const decoded = [];
+  for (const im of ctx.images) {
+    const img = await loadImage(im.href);
+    decoded.push({ ...im, img, alpha: usesAlpha(img) });
+  }
+
+  // Rasters ship as separate files like the approved reference, so nothing pays
+  // the 33% base64 tax. Point the markup at them once; only the bytes change
+  // as the ladder steps.
+  decoded.forEach((d, i) => {
+    d.file = `assets/img${i}.${d.alpha ? "webp" : "jpg"}`;
+    d.el.setAttribute("href", d.file);
+    d.el.removeAttributeNS(XLINK, "href");
+  });
+
+  // Vector markup is a fixed cost that no amount of image crushing can move.
+  // Measure it first, so images are never degraded to chase a budget the
+  // artwork itself is blowing.
+  const markupHtml = buildHtml(serialize(ctx.doc), ctx.width, ctx.height, name);
+  const markupBytes = new TextEncoder().encode(markupHtml);
+  const markupZipped = (await deflateRaw(markupBytes)).length;
+
+  const encode = async (d, i, rung) => {
+    const s = Math.min(1, (longest * rung.maxEdge) / Math.max(d.img.naturalWidth, d.img.naturalHeight));
+    const canvas = drawTo(d.img, d.img.naturalWidth * s, d.img.naturalHeight * s);
+    const type = d.alpha ? "image/webp" : "image/jpeg";   // alpha decides format
+    const blob = await toBlob(canvas, type, rung.quality);
+    return {
+      name: d.file, type, data: new Uint8Array(await blob.arrayBuffer()),
+      w: canvas.width, h: canvas.height,
+      natW: d.img.naturalWidth, natH: d.img.naturalHeight
+    };
+  };
+
+  const weightRule = { id: "weight", title: `Package within ${SPEC.maxZipKB} KB zipped` };
+  let assets = [], chosen = null, html = markupHtml;
+
+  if (markupZipped > budget) {
+    // artwork alone is over — keep images at full quality, report the real cause
+    assets = await Promise.all(decoded.map((d, i) => encode(d, i, SPEC.ladder[0])));
+    const files = [{ name: "index.html", data: markupBytes }, ...assets.map(a => ({ name: a.name, data: a.data }))];
+    const zip = await makeZip(files);
+    chosen = { step: 0, rung: SPEC.ladder[0], zipBytes: zip.size,
+               unzipped: files.reduce((n, f) => n + f.data.length, 0), files, markupZipped };
+    results.push({ rule: weightRule,
+      ...block(`The vector artwork alone is ${kb(markupZipped)} zipped, over the ${SPEC.maxZipKB} KB budget before any images are counted.`,
+        `Images can't fix this — the weight is in the shapes, blurs, gradients and keyframes. In Figma, reduce the number of animated layers or blur effects, or flatten complex vector artwork to a single image layer, then export again.`) });
+  } else {
+    for (let step = 0; step < SPEC.ladder.length; step++) {
+      const rung = SPEC.ladder[step];
+      assets = await Promise.all(decoded.map((d, i) => encode(d, i, rung)));
+      const files = [{ name: "index.html", data: markupBytes }, ...assets.map(a => ({ name: a.name, data: a.data }))];
+      const zip = await makeZip(files);
+      chosen = { step, rung, zipBytes: zip.size,
+                 unzipped: files.reduce((n, f) => n + f.data.length, 0), files, markupZipped };
+      if (zip.size <= budget || !decoded.length) break;
+    }
+
+    if (chosen.zipBytes <= budget) {
+      results.push({ rule: weightRule,
+        ...(chosen.step === 0
+          ? pass(`${kb(chosen.zipBytes)} zipped (${kb(chosen.unzipped)} unzipped)`)
+          : fixed(`Reduced to ${kb(chosen.zipBytes)} zipped (${kb(chosen.unzipped)} unzipped).`,
+                  `Images resampled to ${Math.round(chosen.rung.maxEdge * 100)}% of the canvas's longest edge at quality ${chosen.rung.quality} — step ${chosen.step + 1} of ${SPEC.ladder.length}. Vector markup accounts for ${kb(markupZipped)} of the total.`)) });
+    } else {
+      const worst = [...assets].sort((a, b) => b.data.length - a.data.length)[0];
+      results.push({ rule: weightRule,
+        ...block(`Smallest achievable is ${kb(chosen.zipBytes)} zipped.`,
+          `The reduction ladder bottomed out. "${worst.name}" is still ${kb(worst.data.length)} at ${worst.w}×${worst.h}, down from ${worst.natW}×${worst.natH}. In Figma, replace that photo with a smaller or simpler one, or crop it to the area actually visible on a ${ctx.width}×${ctx.height} canvas.`) });
+    }
+  }
+
+  if (chosen.unzipped > SPEC.maxUnzippedKB * 1024) {
+    results.push({ rule: { id: "unzipped", title: "Unzipped weight" },
+      ...info(`${kb(chosen.unzipped)} unzipped, above the ${SPEC.maxUnzippedKB} KB guideline. The uploaded zip is what platforms gate on, so this is reported rather than enforced — promote it to a blocker in SPEC if a brief says otherwise.`) });
+  }
+
+  if (ctx.images.length) {
+    const alpha = assets.filter(a => a.type === "image/webp").length;
+    if (alpha) results.push({ rule: { id: "format", title: "Raster formats" },
+      ...info(`${alpha} image(s) kept transparency so shipped as WebP; the rest are JPEG. WebP is required here — JPEG would fill the transparent areas with black.`) });
+  }
+
+  return { ctx, results, chosen, html, assets, name, blocked: false };
+}
+
+/* ------------------------------------------------------------------ ui --- */
+function render(out) {
+  const { results } = out;
+  const blockers = results.filter(r => r.status === "block");
+  const fixes = results.filter(r => r.status === "fixed");
+
+  $("verdict").className = "verdict " + (blockers.length ? "no" : "ok");
+  $("verdict").innerHTML = blockers.length
+    ? `<div><b>Not to spec — ${blockers.length} thing${blockers.length === 1 ? "" : "s"} to change</b>
+       <p>Fix the flagged items below in Figma, then export and drop it in again.</p></div>`
+    : `<div><b>Ready to deliver</b>
+       <p>${fixes.length ? `${fixes.length} issue${fixes.length === 1 ? "" : "s"} corrected automatically. ` : ""}Everything else already met spec.</p></div>`;
+
+  // rule text carries layer names and URLs read out of the dropped file
+  const esc = s => String(s == null ? "" : s)
+    .replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+  $("rules").innerHTML = results.map(r => `
+    <div class="rule">
+      <div class="tag ${r.status}">${r.status.toUpperCase()}</div>
+      <div>
+        <b>${esc(r.rule.title)}</b>
+        <p>${esc(r.detail)}</p>
+        ${r.note ? `<p>${esc(r.note)}</p>` : ""}
+        ${r.todo ? `<div class="todo"><b>Change in Figma:</b> ${esc(r.todo)}</div>` : ""}
+      </div>
+    </div>`).join("");
+
+  if (out.blocked || !out.chosen) {
+    $("sizePanel").classList.add("hidden");
+    $("previewBox").innerHTML = "";
+    $("dlZip").disabled = true;
+    $("outNote").textContent = "";
+    $("report").classList.remove("hidden");
+    return;
+  }
+
+  $("sizePanel").classList.remove("hidden");
+  $("sizeTable").innerHTML = `
+    <tr><th>File</th><th>Detail</th><th class="num">Size</th></tr>
+    ${out.chosen.files.map(f => {
+      const a = out.assets.find(x => x.name === f.name);
+      return `<tr><td>${f.name}</td>
+        <td>${a ? `${a.natW}×${a.natH} → ${a.w}×${a.h} ${a.type.split("/")[1].toUpperCase()}` : "inlined SVG + ad shell"}</td>
+        <td class="num">${fmt(f.data.length)}</td></tr>`;
+    }).join("")}
+    <tr><td><b>Zip</b></td><td>from ${fmt(out.ctx.bytes)} source</td>
+        <td class="num"><b>${fmt(out.chosen.zipBytes)}</b> <span class="save">−${(100 - out.chosen.zipBytes / out.ctx.bytes * 100).toFixed(0)}%</span></td></tr>`;
+
+  const scale = Math.min(300 / out.ctx.width, 300 / out.ctx.height);
+  $("previewBox").innerHTML = "";
+  const f = document.createElement("iframe");
+  // allow-scripts without allow-same-origin puts the preview on a unique origin,
+  // so a dropped file can never reach this page or anything else on the host.
+  f.setAttribute("sandbox", "allow-scripts");
+  f.width = out.ctx.width; f.height = out.ctx.height;
+  f.style.transform = `scale(${scale})`;
+  f.srcdoc = out.html;
+  $("previewBox").appendChild(f);
+
+  $("adName").value = out.name;
+  const ok = !blockers.length;
+  $("dlZip").disabled = !ok;
+  $("outNote").textContent = ok
+    ? "Upload the zip as-is. The ad server supplies the landing page through clickTag."
+    : "Download is disabled until the flagged items are fixed.";
+  $("report").classList.remove("hidden");
+}
+
+async function handleFile(file) {
+  const drop = $("drop");
+  drop.classList.add("busy");
+  drop.querySelector("strong").textContent = "Checking and converting…";
+  try {
+    const out = await run(file);
+    built = out;
+    render(out);
+  } catch (e) {
+    $("verdict").className = "verdict no";
+    $("verdict").innerHTML = `<div><b>Couldn't read that file</b><p>${e.message}</p></div>`;
+    $("rules").innerHTML = "";
+    $("sizePanel").classList.add("hidden");
+    $("dlZip").disabled = true;
+    $("report").classList.remove("hidden");
+  } finally {
+    drop.classList.remove("busy");
+    drop.querySelector("strong").textContent = "Drop SVG here";
+  }
+}
+
+$("specline").textContent =
+  `Spec: ≤${SPEC.maxZipKB} KB zipped, ≤${SPEC.maxUnzippedKB} KB unzipped, ≤${SPEC.maxAnimationSeconds}s animation, must stop on the last frame, outlined text, no external calls.`;
+
+const drop = $("drop");
+drop.addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", e => e.target.files[0] && handleFile(e.target.files[0]));
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => {
+  e.preventDefault(); drop.classList.remove("over");
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+$("again").addEventListener("click", () => {
+  built = null; $("file").value = ""; $("report").classList.add("hidden");
+});
+$("dlZip").addEventListener("click", async () => {
+  if (!built || !built.chosen) return;
+  const files = built.chosen.files.map(f =>
+    f.name === "index.html" ? { name: "index.html", data: new TextEncoder().encode(built.html) } : f);
+  const zip = await makeZip(files);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(zip);
+  a.download = `${$("adName").value.trim() || built.name}_${built.ctx.width}x${built.ctx.height}.zip`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+window.__run = run;
+window.__handleFile = handleFile;
+window.__built = () => built;
+</script>
+</body>
+</html>

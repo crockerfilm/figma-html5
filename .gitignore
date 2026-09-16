@@ -1,0 +1,9 @@
+# This repo ships one self-contained tool and nothing else.
+# Creative artwork must never be committed here — it is client material.
+*.svg
+*.zip
+*.png
+*.jpg
+*.jpeg
+*.webp
+.DS_Store

@@ -68,11 +68,38 @@
     color: var(--text); border-radius: 6px; padding: 8px 10px; font: inherit; font-size: 13px; }
   code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   .specline { color: var(--muted); font-size: 12px; margin-top: 14px; }
+
+  .tabs { display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--line);
+    margin: 18px 0 22px; }
+  .tab { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted);
+    padding: 9px 14px; font: inherit; font-weight: 600; font-size: 13px; cursor: pointer;
+    border-radius: 0; margin-bottom: -1px; }
+  .tab:hover { color: var(--text); }
+  .tab.on { color: var(--text); border-bottom-color: var(--accent); }
+  .build { margin-left: auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+  #idrop { border: 2px dashed var(--line); border-radius: 10px; padding: 40px 24px;
+    text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+  #idrop.over { border-color: var(--accent); background: rgba(91,140,255,.07); }
+  #idrop.busy { opacity: .6; pointer-events: none; }
+  #idrop strong { display: block; font-size: 16px; margin-bottom: 6px; }
+  #idrop span { color: var(--muted); }
+  #istage { background: #000; border: 1px solid var(--line); border-radius: 8px;
+    overflow: hidden; position: relative; width: 100%; }
+  #istage iframe { border: 0; position: absolute; top: 0; left: 0; transform-origin: 0 0; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Figma → HTML5 Ad Converter</h1>
+
+  <div class="tabs">
+    <button class="tab on" data-tab="convert">Convert</button>
+    <button class="tab" data-tab="inspect">Inspect a built ad</button>
+    <span class="build" id="build"></span>
+  </div>
+
+<section id="pane-convert">
   <p class="sub">Drop an animated SVG from Figma. It is checked against spec, fixed where a fix is deterministic, and flagged where a human has to change something.</p>
 
   <div class="panel">
@@ -110,6 +137,46 @@
       </div>
     </div>
   </div>
+</section>
+
+<section id="pane-inspect" class="hidden">
+  <p class="sub">Drop a finished <strong>.zip</strong>, or an <strong>index.html</strong>, to audit what is actually in it and scrub through the animation. Use this to check work that came from someone else, or from an older build of this tool.</p>
+
+  <div class="panel">
+    <div id="idrop">
+      <strong>Drop a built ad here</strong>
+      <span>.zip, .html or .svg — nothing is uploaded</span>
+      <input type="file" id="ifile" accept=".zip,.html,.svg" class="hidden">
+    </div>
+    <p class="specline" id="ispecline"></p>
+  </div>
+
+  <div id="ireport" class="hidden">
+    <div id="iverdict"></div>
+
+    <div class="panel">
+      <h2>Playback</h2>
+      <div id="istage"></div>
+      <div class="row" style="margin-top:12px">
+        <button id="iplay">Pause</button>
+        <button id="iend" class="ghost">Jump to end frame</button>
+        <span class="specline" id="itime" style="margin:0"></span>
+      </div>
+      <input type="range" id="iscrub" min="0" max="1000" value="0" style="width:100%;margin-top:10px;accent-color:var(--accent)">
+      <p class="specline" id="iendnote"></p>
+    </div>
+
+    <div class="panel">
+      <h2>What's in the package</h2>
+      <table id="ifacts"></table>
+    </div>
+
+    <div class="panel">
+      <h2>Spec checks</h2>
+      <div id="irules"></div>
+    </div>
+  </div>
+</section>
 </div>
 
 <script>
@@ -804,9 +871,330 @@ $("dlZip").addEventListener("click", async () => {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
 
+/* ========================================================================== *
+ * INSPECT TAB — audits a package that already exists, whoever built it, and
+ * lets you scrub the animation. Entirely separate from the convert pipeline
+ * above; it reads what is in the file rather than rebuilding anything.
+ * ========================================================================== */
+const BUILD = "2026-09-16b";
+$("build").textContent = "build " + BUILD;
+$("ispecline").textContent = $("specline").textContent;
+
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x === t));
+  $("pane-convert").classList.toggle("hidden", t.dataset.tab !== "convert");
+  $("pane-inspect").classList.toggle("hidden", t.dataset.tab !== "inspect");
+}));
+
+const MIME = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif",
+               webp: "image/webp", svg: "image/svg+xml", html: "text/html", css: "text/css",
+               js: "text/javascript", json: "application/json" };
+const mimeOf = n => MIME[(n.split(".").pop() || "").toLowerCase()] || "application/octet-stream";
+
+async function readZip(u8) {
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const dec = new TextDecoder();
+  const files = [];
+  let off = 0;
+  while (off + 30 <= u8.length && dv.getUint32(off, true) === 0x04034b50) {
+    const method = dv.getUint16(off + 8, true);
+    const comp = dv.getUint32(off + 18, true);
+    const nameLen = dv.getUint16(off + 26, true);
+    const extraLen = dv.getUint16(off + 28, true);
+    const name = dec.decode(u8.slice(off + 30, off + 30 + nameLen));
+    const start = off + 30 + nameLen + extraLen;
+    let data = u8.slice(start, start + comp);
+    if (method === 8) {
+      const s = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      data = new Uint8Array(await new Response(s).arrayBuffer());
+    }
+    if (!name.endsWith("/") && !name.startsWith("__MACOSX")) files.push({ name, data });
+    off = start + comp;
+  }
+  if (!files.length) throw new Error("That zip could not be read — it may use a format this reader doesn't handle.");
+  return files;
+}
+
+// Reads the CSS animation shorthand the way a browser does: bare numbers are the
+// iteration count, everything with a unit is a time.
+function readAnimations(css) {
+  let maxLoops = 0, maxTotal = 0, infinite = false, count = 0;
+  for (const decl of css.match(/animation\s*:\s*[^;}]+/g) || []) {
+    for (const seg of decl.replace(/animation\s*:\s*/, "").split(",")) {
+      count++;
+      const sec = t => t.endsWith("ms") ? parseFloat(t) / 1000 : parseFloat(t);
+      const times = seg.match(/-?[\d.]+m?s\b/g) || [];
+      const dur = times[0] ? sec(times[0]) : 0;
+      const delay = times[1] ? Math.max(0, sec(times[1])) : 0;
+      let loops = 1;
+      for (const tok of seg.trim().split(/\s+/)) {
+        if (tok === "infinite") { loops = Infinity; infinite = true; break; }
+        if (/^\d+(\.\d+)?$/.test(tok)) { loops = parseFloat(tok); break; }
+      }
+      maxLoops = Math.max(maxLoops, loops);
+      maxTotal = Math.max(maxTotal, delay + dur * (loops === Infinity ? 1 : loops));
+    }
+  }
+  return { maxLoops, maxTotal, infinite, count };
+}
+
+function auditPackage(files, totalBytes, sourceLabel) {
+  const dec = new TextDecoder();
+  const entry = files.find(f => /(^|\/)index\.html$/i.test(f.name))
+             || files.find(f => /\.html?$/i.test(f.name));
+  if (!entry) throw new Error("No index.html found in that package.");
+
+  const html = dec.decode(entry.data);
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const meta = doc.querySelector('meta[name="ad.size"]');
+  const adSize = meta ? meta.getAttribute("content") || "" : "";
+  const dims = /width=(\d+),\s*height=(\d+)/.exec(adSize);
+  const css = [...doc.querySelectorAll("style")].map(s => s.textContent).join("\n");
+  const anim = readAnimations(css);
+
+  const assets = files.filter(f => f !== entry);
+
+  // Check what the markup asks for as well as what shipped — a loose index.html
+  // has no files beside it, but it still names the formats and paths it expects.
+  const refs = [];
+  const refRe = /(?:src|href)\s*=\s*["']([^"'#?]+\.(?:jpe?g|png|gif|webp|avif|bmp|tiff?|svg))["']/gi;
+  let m;
+  while ((m = refRe.exec(html))) if (!/^(https?:|data:)/i.test(m[1])) refs.push(m[1]);
+
+  const named = [...new Set([...assets.map(a => a.name), ...refs])];
+  const exts = [...new Set(named.map(n => (n.split(".").pop() || "").toLowerCase()))];
+  const allowed = ["jpg", "jpeg", "png", "gif"];
+  const badFormats = exts.filter(e => !allowed.includes(e));
+  const nested = named.filter(n => n.includes("/"));
+  const missing = refs.filter(r => !assets.some(a => a.name === r || a.name.endsWith("/" + r)));
+  const external = [...new Set((html.match(/(?:src|href)\s*=\s*["'](https?:\/\/[^"']+)/gi) || [])
+    .map(s => s.replace(/^.*["']/, "")))].filter(u => !/w3\.org/i.test(u));
+  const clickTagDecl = /var\s+clickTag/.test(html);
+  const clickTagValue = (/var\s+clickTag\s*=\s*"([^"]*)"/.exec(html) || [])[1] || "";
+
+  const checks = [];
+  const add = (level, title, detail) => checks.push({ level, title, detail });
+
+  if (totalBytes != null) {
+    totalBytes / 1024 <= SPEC.maxZipKB
+      ? add("pass", `Package is ${kb(totalBytes)}`, `Within the ${SPEC.maxZipKB} KB limit.`)
+      : add("block", `Package is ${kb(totalBytes)}`, `Over the ${SPEC.maxZipKB} KB limit by ${kb(totalBytes - SPEC.maxZipKB * 1024)}.`);
+  } else {
+    add("info", "Package size unknown", "Only a loose HTML file was given, so its images aren't counted. Drop the .zip to check total weight.");
+  }
+
+  if (!anim.count) add("info", "No CSS animation found", "Either this ad is static or it animates some other way.");
+  else if (anim.infinite) add("block", "Animation loops forever", "It never stops, which display specs don't allow. Rebuild it on the Convert tab.");
+  else {
+    anim.maxLoops <= SPEC.maxLoops
+      ? add("pass", `Plays ${anim.maxLoops} time${anim.maxLoops === 1 ? "" : "s"}`, `At or under the ${SPEC.maxLoops}-play limit.`)
+      : add("block", `Plays ${anim.maxLoops} times`, `Over the ${SPEC.maxLoops}-play limit. Rebuild it on the Convert tab, which caps this.`);
+    anim.maxTotal <= SPEC.maxAnimationSeconds
+      ? add("pass", `Runs ${+anim.maxTotal.toFixed(2)}s in total`, `Within the ${SPEC.maxAnimationSeconds}s limit.`)
+      : add("block", `Runs ${+anim.maxTotal.toFixed(2)}s in total`, `Over the ${SPEC.maxAnimationSeconds}s limit.`);
+  }
+
+  if (badFormats.length)
+    add("block", `Unlisted image format: ${badFormats.join(", ")}`,
+        `The spec lists JPG, GIF and PNG. Rebuild on the Convert tab, which only emits those.`);
+  else if (named.length)
+    add("pass", `Image formats: ${exts.join(", ")}`, "All on the accepted list.");
+
+  if (nested.length)
+    add("warn", `${nested.length} asset(s) in a subfolder`,
+        `${nested.slice(0, 3).join(", ")}. Nothing guarantees a validator walks subfolders — a flat package is safer.`);
+  else if (named.length)
+    add("pass", "Flat package", "Every asset sits at the root.");
+
+  if (missing.length && totalBytes == null)
+    add("info", `${missing.length} image(s) referenced but not included`,
+        `${missing.slice(0, 3).join(", ")}. Expected — a loose HTML file doesn't carry them. Drop the .zip to weigh the real package.`);
+
+  external.length
+    ? add("block", `Calls out to ${external.length} external URL(s)`, external.slice(0, 3).join(", "))
+    : add("pass", "Self-contained", "No runtime calls to other servers.");
+
+  clickTagDecl
+    ? add("pass", "clickTag present", clickTagValue ? `Defaults to "${clickTagValue}" until the ad server overrides it.` : "Empty by default; the ad server supplies the landing page.")
+    : add("block", "No clickTag", "The ad server has no way to attach a landing page.");
+
+  adSize
+    ? add("pass", `ad.size declared: ${adSize}`, "")
+    : add("warn", "No ad.size meta tag", "Some ad servers use this to detect the creative's dimensions.");
+
+  const order = { block: 0, warn: 1, info: 2, pass: 3 };
+  checks.sort((a, b) => order[a.level] - order[b.level]);
+
+  return { entry, html, files, assets, adSize, anim,
+    width: dims ? +dims[1] : 0, height: dims ? +dims[2] : 0,
+    totalBytes, checks, sourceLabel };
+}
+
+const SEEK_SCRIPT = `<script>
+window.addEventListener("message", function (e) {
+  var d = e.data || {}, a = document.getAnimations();
+  if (d.cmd === "seek") { a.forEach(function (x) { x.pause(); x.currentTime = d.t; }); }
+  else if (d.cmd === "play") { a.forEach(function (x) { x.play(); }); }
+  else if (d.cmd === "pause") { a.forEach(function (x) { x.pause(); }); }
+  else if (d.cmd === "probe") {
+    var max = 0;
+    a.forEach(function (x) {
+      var t = x.effect.getComputedTiming();
+      var end = (t.delay || 0) + (isFinite(t.activeDuration) ? t.activeDuration : 0);
+      if (end > max) max = end;
+    });
+    parent.postMessage({ type: "probe", count: a.length, max: max }, "*");
+  }
+});
+<\/script>`;
+
+function inlinePreview(audit) {
+  const dir = audit.entry.name.includes("/")
+    ? audit.entry.name.slice(0, audit.entry.name.lastIndexOf("/") + 1) : "";
+  let out = audit.html;
+  for (const f of audit.assets) {
+    let bin = "";
+    for (let i = 0; i < f.data.length; i += 0x8000)
+      bin += String.fromCharCode.apply(null, f.data.subarray(i, i + 0x8000));
+    const uri = `data:${mimeOf(f.name)};base64,${btoa(bin)}`;
+    const rel = dir && f.name.startsWith(dir) ? f.name.slice(dir.length) : f.name;
+    out = out.split(f.name).join(uri);
+    if (rel !== f.name) out = out.split(rel).join(uri);
+  }
+  return /<\/body>/i.test(out) ? out.replace(/<\/body>/i, SEEK_SCRIPT + "</body>") : out + SEEK_SCRIPT;
+}
+
+let iFrame = null, iDuration = 0, iPlaying = true;
+
+function mountInspect(audit) {
+  const stage = $("istage");
+  stage.innerHTML = "";
+  const w = audit.width || 600, h = audit.height || 600;
+  const avail = Math.min(stage.clientWidth || 600, 640);
+  const scale = avail / w;
+  stage.style.height = Math.round(h * scale) + "px";
+
+  const f = document.createElement("iframe");
+  f.setAttribute("sandbox", "allow-scripts");
+  f.width = w; f.height = h;
+  f.style.transform = `scale(${scale})`;
+  f.srcdoc = inlinePreview(audit);
+  stage.appendChild(f);
+  iFrame = f;
+
+  f.onload = () => setTimeout(() => f.contentWindow.postMessage({ cmd: "probe" }, "*"), 300);
+}
+
+window.addEventListener("message", e => {
+  const d = e.data || {};
+  if (d.type !== "probe") return;
+  iDuration = d.max || 0;
+  $("itime").textContent = iDuration
+    ? `0.00s / ${(iDuration / 1000).toFixed(2)}s · ${d.count} animations`
+    : "no animations found";
+});
+
+function seek(ms) {
+  if (!iFrame) return;
+  iFrame.contentWindow.postMessage({ cmd: "seek", t: ms }, "*");
+  iPlaying = false;
+  $("iplay").textContent = "Play";
+  $("itime").textContent = `${(ms / 1000).toFixed(2)}s / ${(iDuration / 1000).toFixed(2)}s`;
+}
+
+$("iscrub").addEventListener("input", e => {
+  if (iDuration) seek(iDuration * (e.target.value / 1000));
+});
+$("iplay").addEventListener("click", () => {
+  if (!iFrame) return;
+  iPlaying = !iPlaying;
+  iFrame.contentWindow.postMessage({ cmd: iPlaying ? "play" : "pause" }, "*");
+  $("iplay").textContent = iPlaying ? "Pause" : "Play";
+});
+$("iend").addEventListener("click", () => {
+  if (iDuration) { seek(Math.max(0, iDuration - 30)); $("iscrub").value = 1000; }
+});
+
+function renderInspect(audit) {
+  const esc = s => String(s == null ? "" : s)
+    .replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const blockers = audit.checks.filter(c => c.level === "block");
+  const warns = audit.checks.filter(c => c.level === "warn");
+
+  $("iverdict").className = "verdict " + (blockers.length ? "no" : "ok");
+  $("iverdict").innerHTML = blockers.length
+    ? `<div><b>${blockers.length} problem${blockers.length === 1 ? "" : "s"} with this package</b>
+       <p>It does not meet spec as built. Details below.</p></div>`
+    : `<div><b>This package meets spec</b>
+       <p>${warns.length ? `${warns.length} thing${warns.length === 1 ? "" : "s"} worth a look, but nothing blocking.` : "Everything checked out."}</p></div>`;
+
+  $("ifacts").innerHTML = `
+    <tr><th>File</th><th>Type</th><th class="num">Size</th></tr>
+    ${audit.files.map(f => `<tr><td>${esc(f.name)}</td><td>${esc(mimeOf(f.name))}</td>
+      <td class="num">${fmt(f.data.length)}</td></tr>`).join("")}
+    ${audit.totalBytes != null
+      ? `<tr><td><b>Total</b></td><td>${esc(audit.sourceLabel)}</td><td class="num"><b>${fmt(audit.totalBytes)}</b></td></tr>`
+      : ""}`;
+
+  $("irules").innerHTML = audit.checks.map(c => `
+    <div class="rule">
+      <div class="tag ${c.level}">${c.level.toUpperCase()}</div>
+      <div><b>${esc(c.title)}</b>${c.detail ? `<p>${esc(c.detail)}</p>` : ""}</div>
+    </div>`).join("");
+
+  $("iendnote").textContent = audit.anim.count
+    ? "Drag to scrub. Check the end frame shows your call to action — a seamless loop freezes on frame one, which is easy to miss at full speed."
+    : "";
+
+  $("ireport").classList.remove("hidden");
+  mountInspect(audit);
+}
+
+async function handleInspect(file) {
+  const drop = $("idrop");
+  drop.classList.add("busy");
+  drop.querySelector("strong").textContent = "Reading…";
+  try {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let files, totalBytes = null, label = file.name;
+    if (/\.zip$/i.test(file.name)) {
+      files = await readZip(buf);
+      totalBytes = file.size;
+      label = "zip as uploaded";
+    } else if (/\.svg$/i.test(file.name)) {
+      throw new Error("That's a source SVG — use the Convert tab to build it first.");
+    } else {
+      files = [{ name: file.name.replace(/\s*\(\d+\)/, "").replace(/[^/]*$/, "index.html"), data: buf }];
+      label = "single file, images not included";
+    }
+    renderInspect(auditPackage(files, totalBytes, label));
+  } catch (e) {
+    $("iverdict").className = "verdict no";
+    $("iverdict").innerHTML = `<div><b>Couldn't read that</b><p>${e.message}</p></div>`;
+    $("irules").innerHTML = ""; $("ifacts").innerHTML = ""; $("istage").innerHTML = "";
+    $("ireport").classList.remove("hidden");
+  } finally {
+    drop.classList.remove("busy");
+    drop.querySelector("strong").textContent = "Drop a built ad here";
+  }
+}
+
+const idrop = $("idrop");
+idrop.addEventListener("click", () => $("ifile").click());
+$("ifile").addEventListener("change", e => e.target.files[0] && handleInspect(e.target.files[0]));
+idrop.addEventListener("dragover", e => { e.preventDefault(); idrop.classList.add("over"); });
+idrop.addEventListener("dragleave", () => idrop.classList.remove("over"));
+idrop.addEventListener("drop", e => {
+  e.preventDefault(); idrop.classList.remove("over");
+  if (e.dataTransfer.files[0]) handleInspect(e.dataTransfer.files[0]);
+});
+
 window.__run = run;
 window.__handleFile = handleFile;
 window.__built = () => built;
+window.__inspect = handleInspect;
+window.__audit = auditPackage;
+window.__readZip = readZip;
 </script>
 </body>
 </html>

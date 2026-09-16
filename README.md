@@ -42,6 +42,22 @@ last frame to meet spec, and Figma exports seamless loops whose last frame is th
 - Ships images as separate files at the package root rather than base64, avoiding a 33%
   size penalty and any question of whether a validator walks subfolders
 
+## Inspect a built ad
+
+The second tab audits a package that already exists — drop a finished **.zip** or an
+**index.html** and it reports what is actually in it rather than rebuilding anything.
+Use it to check work that came from someone else, or that was built by an older version
+of this tool.
+
+It reads the real bytes: total weight, how many times the animation plays and for how
+long, image formats, whether assets sit in subfolders, external calls, clickTag and
+`ad.size`. It also gives you a large preview with a timeline scrubber and a **jump to
+end frame** button — the quickest way to confirm the ad finishes on your call to action
+rather than back on frame one.
+
+A loose `index.html` has no images beside it, so weight can't be judged; formats and
+paths are still checked from what the markup references.
+
 ## What it refuses to guess
 
 It blocks, and tells you what to change, when the export is static, when text isn't

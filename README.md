@@ -45,17 +45,26 @@ cutouts that genuinely need it.
 **3. Crop transparent images to their content.** A cutout that is mostly empty space is
 paying full price for pixels nobody sees. Trim the frame to the artwork.
 
-**4. Place images near the size they appear.** A 4000px photo sitting in a 1080px frame
-exports at 4000px. The tool will resample it, but it can only spend the budget once —
-start close to the final size and it spends it on things you can see.
+**4. Never place an image smaller than it is shown at.** Every image is automatically
+resampled to the size it is actually drawn at, so an oversized source costs you nothing.
+The reverse is not true: a 400px image stretched across an 800px frame can only ever look
+soft, and the tool will say so under *Image sharpness*.
+
+**4a. Watch for many transparent cutouts on one canvas.** Six product cutouts each drawn
+at 400px need roughly 250KB as PNG and will not fit. If they sit on a common background,
+composite the whole cluster into one flattened image in Figma: one opaque JPEG is far
+sharper than six starved PNGs for the same bytes.
 
 **5. Reuse one image rather than duplicating it.** Identical images are detected and
 shipped once, so placing the same texture or logo five times costs what one costs.
 Five near-identical variants cost five times as much.
 
-**6. Flatten live blur effects.** Gaussian blur is recalculated every frame and is a
-common reason an ad gets pulled for CPU load on weak devices. If blurred artwork never
-changes, flatten it into an image layer in Figma. The tool warns past eight live blurs.
+**6. Flatten live blur effects, and never animate a blur amount.** Gaussian blur is
+recalculated every frame and is a common reason an ad gets pulled for CPU load on weak
+devices. Animating the blur *amount* is the worst case, because the whole effect is
+recomputed on every frame — animate opacity, position or scale instead. If blurred
+artwork never changes, flatten it into an image layer. The tool warns on an animated
+blur, on any radius past 40px, and past eight live blurs.
 
 **7. Prefer linear gradients.** Diamond and angular gradients have no SVG equivalent, so
 Figma fakes them with mirrored rectangles and a clip path. The tool repairs the two ways

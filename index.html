@@ -371,10 +371,32 @@ function inspect(text) {
     }
   }
 
+  // Work out how large each image is actually drawn. Figma paints photos through a
+  // pattern, so the real size sits on the shape the pattern fills, not on <image>.
+  // More pixels than that is waste; fewer makes it visibly soft.
   const images = [];
   for (const el of doc.querySelectorAll("image")) {
     const href = el.getAttribute("href") || el.getAttributeNS(XLINK, "href") || "";
-    if (href.startsWith("data:")) images.push({ el, href });
+    if (!href.startsWith("data:")) continue;
+
+    let dispW = parseFloat(el.getAttribute("width")) || 0;
+    let dispH = parseFloat(el.getAttribute("height")) || 0;
+    const id = el.getAttribute("id");
+    if (id) {
+      const use = doc.querySelector(`use[*|href="#${id}"], use[href="#${id}"]`);
+      const pattern = use && use.closest("pattern");
+      if (pattern && pattern.id) {
+        let w = 0, h = 0;
+        for (const n of doc.querySelectorAll("[fill], [stroke]")) {
+          const paint = (n.getAttribute("fill") || "") + (n.getAttribute("stroke") || "");
+          if (!paint.includes(`#${pattern.id}`)) continue;
+          w = Math.max(w, parseFloat(n.getAttribute("width")) || 0);
+          h = Math.max(h, parseFloat(n.getAttribute("height")) || 0);
+        }
+        if (w || h) { dispW = w; dispH = h; }
+      }
+    }
+    images.push({ el, href, dispW, dispH });
   }
 
   const diamond = [...new Set([...doc.querySelectorAll("[data-figma-skip-parse]")].map(el => {
@@ -554,7 +576,22 @@ const RULES = [
 
   { id: "render-cost", title: "Render cost",
     run(ctx) {
-      if (ctx.blurs <= 8) return pass(`${ctx.blurs} blur filter(s)`);
+      // A blur's cost scales with its radius, and animating that radius forces the
+      // whole filter to be recomputed every frame — far worse than a static blur.
+      let widest = 0;
+      for (const b of ctx.doc.querySelectorAll("feGaussianBlur"))
+        for (const v of (b.getAttribute("stdDeviation") || "").split(/[\s,;]+/))
+          widest = Math.max(widest, parseFloat(v) || 0);
+      const animatedBlur = [...ctx.doc.querySelectorAll("animate")]
+        .some(a => /stdDeviation/i.test(a.getAttribute("attributeName") || ""));
+
+      if (animatedBlur)
+        return warn(`A blur radius is animated (up to ${Math.round(widest)}px)`,
+          "Animating stdDeviation re-renders the entire blur every frame and is the most expensive thing a display ad can do. In Figma, animate the layer's opacity, position or scale instead of its blur amount, or bake the effect into a short image sequence.");
+      if (widest >= 40)
+        return warn(`A blur radius of ${Math.round(widest)}px`,
+          "Very wide blurs are costly to render on low-end devices. In Figma, flatten this layer into an image rather than leaving a live blur effect on it.");
+      if (ctx.blurs <= 8) return pass(`${ctx.blurs} blur filter(s), widest ${Math.round(widest)}px`);
       return warn(`${ctx.blurs} blur filters`,
         "Gaussian blur is recalculated every frame and is a common cause of an ad being pulled for CPU load on low-end devices. In Figma, flatten blurred artwork into an image layer rather than leaving a live blur effect on it.");
     } },
@@ -710,7 +747,11 @@ async function run(file) {
   const decoded = [];
   for (const g of groups.values()) {
     const img = await loadImage(g.href);
-    decoded.push({ href: g.href, els: g.els, img, alpha: usesAlpha(img) });
+    const src = ctx.images.find(im => im.href === g.href) || {};
+    // Rung 0 means "exactly the pixels it is drawn at" — never more.
+    const target = Math.max(src.dispW || 0, src.dispH || 0)
+                || Math.max(img.naturalWidth, img.naturalHeight);
+    decoded.push({ href: g.href, els: g.els, img, alpha: usesAlpha(img), target });
   }
 
   // Rasters ship as separate files so nothing pays the 33% base64 tax, kept flat
@@ -732,12 +773,13 @@ async function run(file) {
   const markupZipped = (await deflateRaw(markupBytes)).length;
 
   const encode = async (d, rung) => {
-    const s = Math.min(1, (longest * SPEC.ladder[rung]) / Math.max(d.img.naturalWidth, d.img.naturalHeight));
+    const s = Math.min(1, (d.target * SPEC.ladder[rung]) / Math.max(d.img.naturalWidth, d.img.naturalHeight));
     const canvas = drawTo(d.img, d.img.naturalWidth * s, d.img.naturalHeight * s);
     const blob = await toBlob(canvas, d.type, d.type === "image/jpeg" ? SPEC.jpegQuality : undefined);
     return {
       name: d.file, type: d.type, rung, data: new Uint8Array(await blob.arrayBuffer()),
-      w: canvas.width, h: canvas.height, natW: d.img.naturalWidth, natH: d.img.naturalHeight
+      w: canvas.width, h: canvas.height, natW: d.img.naturalWidth, natH: d.img.naturalHeight,
+      target: d.target, drawn: Math.max(canvas.width, canvas.height)
     };
   };
   const memo = new Map();
@@ -813,6 +855,16 @@ async function run(file) {
     results.push({ rule: weightRule,
       ...block(`Smallest achievable is ${kb(chosen.zipBytes)}, over the ${SPEC.maxZipKB} KB budget.`,
         `Every image is already at the bottom of the resolution ladder. "${worst.name}" is still ${kb(worst.data.length)} at ${worst.w}×${worst.h}, down from ${worst.natW}×${worst.natH}${worst.type === "image/png" ? " — it has to stay PNG because it uses transparency, which costs far more than a photo" : ""}. In Figma, simplify or crop that layer, or remove its transparency so it can ship as a JPEG.`) });
+  }
+
+  // Fitting the budget by quietly wrecking an image is not the same as fitting it.
+  const soft = assets
+    .filter(a => a.target && a.drawn && a.target / a.drawn >= 1.5)
+    .map(a => `${a.name} at ${a.w}×${a.h} is stretched ${(a.target / a.drawn).toFixed(1)}× on screen`);
+  if (soft.length) {
+    results.push({ rule: { id: "sharpness", title: "Image sharpness" },
+      ...warn(`${soft.length} image(s) had to be shrunk below the size they are drawn at.`,
+        soft.join("; ") + ". They will look soft. To sharpen them, free up budget elsewhere — flatten a live blur into an image, remove transparency from anything that doesn't need it so it can ship as a JPEG, or simplify the vector artwork.") });
   }
 
   if (assets.length) {

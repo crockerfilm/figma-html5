@@ -385,10 +385,17 @@ const RULES = [
                    "Ad platforms reject scripts inside creative artwork. Nothing in a Figma export needs them.");
     } },
 
-  { id: "diamond-gradient", title: "Gradient fills aligned to their shapes",
+  { id: "diamond-gradient", title: "Gradient fills aligned and seam-free",
     run(ctx) {
-      const repaired = [];
+      const repaired = [], deseamed = [];
+      const SEAM_PX = 1.5;   // overlap, in device pixels, between mirrored quadrants
+
       for (const b of ctx.doc.querySelectorAll("[data-figma-skip-parse]")) {
+        let named = b.parentElement;
+        while (named && !named.id) named = named.parentElement;
+        const name = named ? named.id : "(unnamed layer)";
+
+        // 1. Cancel the ancestor transform Figma failed to apply to the gradient.
         let anc = IDENTITY.slice();
         const chain = [];
         for (let n = b.parentElement; n && n.nodeName.toLowerCase() !== "svg"; n = n.parentElement) chain.unshift(n);
@@ -396,24 +403,49 @@ const RULES = [
           const t = el.getAttribute("transform");
           if (t) anc = matMul(anc, parseTransform(t));
         }
-        if (anc.every((v, i) => Math.abs(v - IDENTITY[i]) < 1e-9)) continue;
-        const inv = matInvert(anc);
-        let touched = false;
-        for (const g of b.children) {
-          const cur = g.getAttribute && g.getAttribute("transform");
-          if (!cur) continue;
-          g.setAttribute("transform", "matrix(" + matMul(inv, parseTransform(cur)).map(v => +v.toFixed(5)).join(" ") + ")");
-          touched = true;
+        if (!anc.every((v, i) => Math.abs(v - IDENTITY[i]) < 1e-9)) {
+          const inv = matInvert(anc);
+          let touched = false;
+          for (const g of b.children) {
+            const cur = g.getAttribute && g.getAttribute("transform");
+            if (!cur) continue;
+            g.setAttribute("transform", "matrix(" + matMul(inv, parseTransform(cur)).map(v => +v.toFixed(5)).join(" ") + ")");
+            touched = true;
+          }
+          if (touched) repaired.push(name);
         }
-        if (touched) {
-          let named = b.parentElement;
-          while (named && !named.id) named = named.parentElement;
-          repaired.push(named ? named.id : "(unnamed layer)");
+
+        // 2. Figma builds the diamond from four rectangles mirrored about x=0 and
+        // y=0. They abut exactly, and with antialiasing disabled those shared edges
+        // read as a faint cross through the artwork. Grow each rect back across the
+        // mirror axes so the quadrants overlap instead of meeting. The gradient is
+        // userSpaceOnUse, so changing rect bounds moves no colour — it only extends
+        // the painted area, and the overlap sits where both quadrants agree.
+        for (const g of b.children) {
+          if (!g.getAttribute) continue;
+          const m = parseTransform(g.getAttribute("transform") || "");
+          const ex = SEAM_PX / (Math.hypot(m[0], m[1]) || 1);
+          const ey = SEAM_PX / (Math.hypot(m[2], m[3]) || 1);
+          let any = false;
+          for (const r of g.querySelectorAll("rect")) {
+            const num = a => parseFloat(r.getAttribute(a)) || 0;
+            r.setAttribute("x", +(num("x") - ex).toFixed(4));
+            r.setAttribute("y", +(num("y") - ey).toFixed(4));
+            r.setAttribute("width", +(num("width") + ex).toFixed(4));
+            r.setAttribute("height", +(num("height") + ey).toFixed(4));
+            r.removeAttribute("shape-rendering");   // let the overlap antialias
+            any = true;
+          }
+          if (any) deseamed.push(name);
         }
       }
-      if (!repaired.length) return pass(ctx.diamond.length ? "already aligned" : "no diamond gradients");
-      return fixed(`Realigned ${repaired.length} layer(s): ${repaired.join(", ")}.`,
-                   "Figma moves these layers into local coordinates but leaves their diamond/angular gradient in canvas coordinates, which slices the artwork. The offset has been cancelled out.");
+
+      if (!repaired.length && !deseamed.length)
+        return pass(ctx.diamond.length ? "already aligned" : "no diamond gradients");
+
+      const layers = [...new Set([...repaired, ...deseamed])];
+      return fixed(`Repaired ${layers.length} layer(s): ${layers.join(", ")}.`,
+        "Figma leaves these gradients in canvas coordinates while moving the shape into local ones, which slices the artwork, and builds them from four mirrored rectangles whose shared edges show as a faint cross. Both the offset and the seams have been corrected.");
     } },
 
   { id: "loop", title: "Animation stops instead of looping forever",
@@ -661,13 +693,26 @@ function render(out) {
 
   const scale = Math.min(300 / out.ctx.width, 300 / out.ctx.height);
   $("previewBox").innerHTML = "";
+
+  // The zip references images by relative path, which srcdoc has no base URL to
+  // resolve, and the sandbox puts the frame on its own origin so blob: URLs from
+  // this page are off limits too. Inline the real output bytes as data URIs so the
+  // preview shows exactly what ships.
+  let previewHtml = out.html;
+  for (const a of out.assets) {
+    let bin = "";
+    for (let i = 0; i < a.data.length; i += 0x8000)
+      bin += String.fromCharCode.apply(null, a.data.subarray(i, i + 0x8000));
+    previewHtml = previewHtml.split(a.name).join(`data:${a.type};base64,${btoa(bin)}`);
+  }
+
   const f = document.createElement("iframe");
   // allow-scripts without allow-same-origin puts the preview on a unique origin,
   // so a dropped file can never reach this page or anything else on the host.
   f.setAttribute("sandbox", "allow-scripts");
   f.width = out.ctx.width; f.height = out.ctx.height;
   f.style.transform = `scale(${scale})`;
-  f.srcdoc = out.html;
+  f.srcdoc = previewHtml;
   $("previewBox").appendChild(f);
 
   $("adName").value = out.name;

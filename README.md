@@ -37,9 +37,10 @@ last frame to meet spec, and Figma exports seamless loops whose last frame is th
 - Realigns diamond/angular gradients, which Figma exports offset from the shape they
   fill, slicing the artwork
 - Strips any scripts from the artwork
-- Resamples and re-encodes embedded images down a fixed ladder until the package fits,
-  choosing JPEG or WebP based on whether the image actually uses transparency
-- Ships images as separate files rather than base64, avoiding a 33% size penalty
+- Sizes each embedded image independently against measured bytes until the package fits,
+  choosing JPEG or PNG from whether that image's own pixels actually use transparency
+- Ships images as separate files at the package root rather than base64, avoiding a 33%
+  size penalty and any question of whether a validator walks subfolders
 
 ## What it refuses to guess
 
@@ -56,16 +57,19 @@ the file needs to change to retarget it at a different placement.
 
 ```js
 const SPEC = {
-  maxZipKB: 150,          // enforced — this is what you upload
-  maxUnzippedKB: 300,     // reported only
-  maxAnimationSeconds: 15,
+  maxZipKB: 200,           // max initial load for an HTML ad tag
+  maxAnimationSeconds: 15, // total animation time, including loops
+  maxLoops: 3,             // and no more than this many plays
+  formatOpaque: "image/jpeg",
+  formatAlpha:  "image/png",
   ...
 };
 ```
 
-These defaults are derived from a reference banner that passed its platform's spec
-checker (68.5 KB zipped, 12s, one play then hold). **Replace them with the real numbers
-from a spec sheet when you have one.**
+The shipped defaults follow the published
+[Amazon Ads technical guidelines](https://advertising.amazon.com/resources/ad-policy/technical-guidelines):
+200 KB maximum initial load, animation up to 3 loops within 15 seconds, and JPG/GIF/PNG
+as the listed image formats. Swap them for whatever a brief specifies.
 
 ## Browser support
 

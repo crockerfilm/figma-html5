@@ -125,24 +125,24 @@
  * in this file needs to change.
  * ========================================================================== */
 const SPEC = {
-  maxZipKB: 150,
-  maxUnzippedKB: 300,
-  maxAnimationSeconds: 15,
+  maxZipKB: 200,               // max initial load for an HTML ad tag
+  maxAnimationSeconds: 15,     // total animation time, including loops
+  maxLoops: 3,                 // and no more than this many plays
   holdOnLastFrame: true,       // animation must stop, not loop forever
   requireOutlinedText: true,   // no font dependency at render time
   allowExternalRefs: false,    // creative must be self-contained
-  // Deterministic reduction ladder, walked in order until the package fits.
-  // maxEdge is a multiple of the canvas's longest edge; nothing is ever upscaled.
-  ladder: [
-    { maxEdge: 2.00, quality: 0.85 },
-    { maxEdge: 1.50, quality: 0.82 },
-    { maxEdge: 1.25, quality: 0.78 },
-    { maxEdge: 1.00, quality: 0.75 },
-    { maxEdge: 0.85, quality: 0.70 },
-    { maxEdge: 0.70, quality: 0.65 },
-    { maxEdge: 0.55, quality: 0.60 },
-    { maxEdge: 0.45, quality: 0.55 }
-  ]
+  jpegQuality: 0.8,
+
+  // Only formats the spec lists. An image's own pixels decide which it gets:
+  // anything using alpha must keep it, everything else takes the smaller one.
+  formatOpaque: "image/jpeg",
+  formatAlpha: "image/png",
+
+  // Resolution ladder, as fractions of the canvas's longest edge. Relative, so
+  // it means the same thing on a 300x250 as on a 1080x1080, and nothing is ever
+  // upscaled past its source. Each image is sized independently against measured
+  // encoded bytes — no assumptions about what any image contains.
+  ladder: [1, 0.8, 0.65, 0.5, 0.4, 0.32, 0.25, 0.2, 0.15, 0.1]
 };
 
 const $ = id => document.getElementById(id);
@@ -452,7 +452,10 @@ const RULES = [
     run(ctx) {
       if (!ctx.infinite) return pass("already finite");
       if (!SPEC.holdOnLastFrame) return pass("looping allowed");
-      const loops = ctx.cycle > 0 ? Math.max(1, Math.floor(SPEC.maxAnimationSeconds / ctx.cycle)) : 1;
+      // Two limits apply at once: total seconds, and a hard cap on plays.
+      const loops = ctx.cycle > 0
+        ? Math.max(1, Math.min(SPEC.maxLoops, Math.floor(SPEC.maxAnimationSeconds / ctx.cycle)))
+        : 1;
       ctx.loops = loops;
       for (const s of ctx.doc.querySelectorAll("style"))
         s.textContent = s.textContent.replace(/\binfinite\b/g, `${loops} forwards`);
@@ -562,11 +565,11 @@ async function run(file) {
     decoded.push({ ...im, img, alpha: usesAlpha(img) });
   }
 
-  // Rasters ship as separate files like the approved reference, so nothing pays
-  // the 33% base64 tax. Point the markup at them once; only the bytes change
-  // as the ladder steps.
+  // Rasters ship as separate files so nothing pays the 33% base64 tax, kept flat
+  // at the package root because nothing guarantees a validator walks subfolders.
   decoded.forEach((d, i) => {
-    d.file = `assets/img${i}.${d.alpha ? "webp" : "jpg"}`;
+    d.type = d.alpha ? SPEC.formatAlpha : SPEC.formatOpaque;
+    d.file = `img${i}.${d.type === "image/png" ? "png" : "jpg"}`;
     d.el.setAttribute("href", d.file);
     d.el.removeAttributeNS(XLINK, "href");
   });
@@ -578,65 +581,94 @@ async function run(file) {
   const markupBytes = new TextEncoder().encode(markupHtml);
   const markupZipped = (await deflateRaw(markupBytes)).length;
 
-  const encode = async (d, i, rung) => {
-    const s = Math.min(1, (longest * rung.maxEdge) / Math.max(d.img.naturalWidth, d.img.naturalHeight));
+  const encode = async (d, rung) => {
+    const s = Math.min(1, (longest * SPEC.ladder[rung]) / Math.max(d.img.naturalWidth, d.img.naturalHeight));
     const canvas = drawTo(d.img, d.img.naturalWidth * s, d.img.naturalHeight * s);
-    const type = d.alpha ? "image/webp" : "image/jpeg";   // alpha decides format
-    const blob = await toBlob(canvas, type, rung.quality);
+    const blob = await toBlob(canvas, d.type, d.type === "image/jpeg" ? SPEC.jpegQuality : undefined);
     return {
-      name: d.file, type, data: new Uint8Array(await blob.arrayBuffer()),
-      w: canvas.width, h: canvas.height,
-      natW: d.img.naturalWidth, natH: d.img.naturalHeight
+      name: d.file, type: d.type, rung, data: new Uint8Array(await blob.arrayBuffer()),
+      w: canvas.width, h: canvas.height, natW: d.img.naturalWidth, natH: d.img.naturalHeight
     };
   };
+  const memo = new Map();
+  const at = async (i, rung) => {
+    const key = i + ":" + rung;
+    if (!memo.has(key)) memo.set(key, await encode(decoded[i], rung));
+    return memo.get(key);
+  };
+  const totalOf = async picks => {
+    let n = 0;
+    for (let i = 0; i < picks.length; i++) n += (await at(i, picks[i])).data.length;
+    return n;
+  };
 
-  const weightRule = { id: "weight", title: `Package within ${SPEC.maxZipKB} KB zipped` };
-  let assets = [], chosen = null, html = markupHtml;
+  const weightRule = { id: "weight", title: `Package within ${SPEC.maxZipKB} KB` };
+  const imageBudget = budget - markupZipped;
+  let assets = [], picks = [], overBudget = false;
 
-  if (markupZipped > budget) {
-    // artwork alone is over — keep images at full quality, report the real cause
-    assets = await Promise.all(decoded.map((d, i) => encode(d, i, SPEC.ladder[0])));
-    const files = [{ name: "index.html", data: markupBytes }, ...assets.map(a => ({ name: a.name, data: a.data }))];
-    const zip = await makeZip(files);
-    chosen = { step: 0, rung: SPEC.ladder[0], zipBytes: zip.size,
-               unzipped: files.reduce((n, f) => n + f.data.length, 0), files, markupZipped };
+  if (imageBudget <= 0) {
+    // Markup alone is over budget, so no amount of image reduction can help.
+    // Leave them at full size: the numbers should show where the weight really
+    // is, not a set of ruined images in a package that is blocked anyway.
+    overBudget = true;
+    for (let i = 0; i < decoded.length; i++) picks.push(0);
+  } else if (decoded.length) {
+    // Give every image an equal slice, take the largest rung that fits it, then
+    // hand back whatever the split left over — largest gain first, fixed order,
+    // so the same input always lands on the same result.
+    const share = imageBudget / decoded.length;
+    for (let i = 0; i < decoded.length; i++) {
+      let chosenRung = SPEC.ladder.length - 1;
+      for (let r = 0; r < SPEC.ladder.length; r++) {
+        if ((await at(i, r)).data.length <= share) { chosenRung = r; break; }
+      }
+      picks.push(chosenRung);
+    }
+    for (let guard = 0; guard < SPEC.ladder.length * decoded.length; guard++) {
+      let improved = false;
+      for (let i = 0; i < picks.length; i++) {
+        if (picks[i] === 0) continue;
+        const trial = picks.slice();
+        trial[i] -= 1;
+        if (await totalOf(trial) <= imageBudget) { picks = trial; improved = true; }
+      }
+      if (!improved) break;
+    }
+    overBudget = (await totalOf(picks)) > imageBudget;
+  }
+
+  for (let i = 0; i < decoded.length; i++) assets.push(await at(i, picks[i]));
+
+  const files = [{ name: "index.html", data: markupBytes },
+                 ...assets.map(a => ({ name: a.name, data: a.data }))];
+  const zip = await makeZip(files);
+  const chosen = { zipBytes: zip.size, unzipped: files.reduce((n, f) => n + f.data.length, 0),
+                   files, markupZipped, picks };
+  const html = markupHtml;
+
+  if (chosen.zipBytes <= budget) {
+    const reduced = assets.filter(a => a.rung > 0);
     results.push({ rule: weightRule,
-      ...block(`The vector artwork alone is ${kb(markupZipped)} zipped, over the ${SPEC.maxZipKB} KB budget before any images are counted.`,
-        `Images can't fix this — the weight is in the shapes, blurs, gradients and keyframes. In Figma, reduce the number of animated layers or blur effects, or flatten complex vector artwork to a single image layer, then export again.`) });
+      ...(reduced.length
+        ? fixed(`${kb(chosen.zipBytes)} — ${reduced.length} image(s) resampled to fit.`,
+                assets.map(a => `${a.name} ${a.natW}×${a.natH} → ${a.w}×${a.h} (${kb(a.data.length)})`).join("; ")
+                + `. Vector markup is ${kb(markupZipped)} of the total.`)
+        : pass(`${kb(chosen.zipBytes)}, nothing had to be reduced.`)) });
+  } else if (imageBudget <= 0) {
+    results.push({ rule: weightRule,
+      ...block(`The vector artwork alone is ${kb(markupZipped)}, over the ${SPEC.maxZipKB} KB budget before any image is counted.`,
+        "Images can't fix this — the weight is in the shapes, blurs, gradients and keyframes. In Figma reduce the number of animated layers or effects, or flatten complex vector artwork into a single image layer, then export again.") });
   } else {
-    for (let step = 0; step < SPEC.ladder.length; step++) {
-      const rung = SPEC.ladder[step];
-      assets = await Promise.all(decoded.map((d, i) => encode(d, i, rung)));
-      const files = [{ name: "index.html", data: markupBytes }, ...assets.map(a => ({ name: a.name, data: a.data }))];
-      const zip = await makeZip(files);
-      chosen = { step, rung, zipBytes: zip.size,
-                 unzipped: files.reduce((n, f) => n + f.data.length, 0), files, markupZipped };
-      if (zip.size <= budget || !decoded.length) break;
-    }
-
-    if (chosen.zipBytes <= budget) {
-      results.push({ rule: weightRule,
-        ...(chosen.step === 0
-          ? pass(`${kb(chosen.zipBytes)} zipped (${kb(chosen.unzipped)} unzipped)`)
-          : fixed(`Reduced to ${kb(chosen.zipBytes)} zipped (${kb(chosen.unzipped)} unzipped).`,
-                  `Images resampled to ${Math.round(chosen.rung.maxEdge * 100)}% of the canvas's longest edge at quality ${chosen.rung.quality} — step ${chosen.step + 1} of ${SPEC.ladder.length}. Vector markup accounts for ${kb(markupZipped)} of the total.`)) });
-    } else {
-      const worst = [...assets].sort((a, b) => b.data.length - a.data.length)[0];
-      results.push({ rule: weightRule,
-        ...block(`Smallest achievable is ${kb(chosen.zipBytes)} zipped.`,
-          `The reduction ladder bottomed out. "${worst.name}" is still ${kb(worst.data.length)} at ${worst.w}×${worst.h}, down from ${worst.natW}×${worst.natH}. In Figma, replace that photo with a smaller or simpler one, or crop it to the area actually visible on a ${ctx.width}×${ctx.height} canvas.`) });
-    }
+    const worst = [...assets].sort((a, b) => b.data.length - a.data.length)[0];
+    results.push({ rule: weightRule,
+      ...block(`Smallest achievable is ${kb(chosen.zipBytes)}, over the ${SPEC.maxZipKB} KB budget.`,
+        `Every image is already at the bottom of the resolution ladder. "${worst.name}" is still ${kb(worst.data.length)} at ${worst.w}×${worst.h}, down from ${worst.natW}×${worst.natH}${worst.type === "image/png" ? " — it has to stay PNG because it uses transparency, which costs far more than a photo" : ""}. In Figma, simplify or crop that layer, or remove its transparency so it can ship as a JPEG.`) });
   }
 
-  if (chosen.unzipped > SPEC.maxUnzippedKB * 1024) {
-    results.push({ rule: { id: "unzipped", title: "Unzipped weight" },
-      ...info(`${kb(chosen.unzipped)} unzipped, above the ${SPEC.maxUnzippedKB} KB guideline. The uploaded zip is what platforms gate on, so this is reported rather than enforced — promote it to a blocker in SPEC if a brief says otherwise.`) });
-  }
-
-  if (ctx.images.length) {
-    const alpha = assets.filter(a => a.type === "image/webp").length;
-    if (alpha) results.push({ rule: { id: "format", title: "Raster formats" },
-      ...info(`${alpha} image(s) kept transparency so shipped as WebP; the rest are JPEG. WebP is required here — JPEG would fill the transparent areas with black.`) });
+  if (assets.length) {
+    const png = assets.filter(a => a.type === "image/png").length;
+    results.push({ rule: { id: "format", title: "Raster formats" },
+      ...info(`${assets.length - png} JPEG, ${png} PNG. Format is chosen per image from its own pixels — anything using transparency has to stay PNG, since JPEG would fill those areas with black.`) });
   }
 
   return { ctx, results, chosen, html, assets, name, blocked: false };
@@ -746,7 +778,7 @@ async function handleFile(file) {
 }
 
 $("specline").textContent =
-  `Spec: ≤${SPEC.maxZipKB} KB zipped, ≤${SPEC.maxUnzippedKB} KB unzipped, ≤${SPEC.maxAnimationSeconds}s animation, must stop on the last frame, outlined text, no external calls.`;
+  `Spec: ≤${SPEC.maxZipKB} KB package, ≤${SPEC.maxAnimationSeconds}s animation over at most ${SPEC.maxLoops} plays, must stop on the last frame, JPG/PNG only, outlined text, no external calls.`;
 
 const drop = $("drop");
 drop.addEventListener("click", () => $("file").click());

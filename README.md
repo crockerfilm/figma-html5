@@ -26,8 +26,51 @@ In the export panel:
 | Outline text | **On** | Otherwise the ad depends on fonts that may not load |
 | Include "id" attribute | Off | The animated export already emits the ids its animation needs |
 
-Build the animation so it **ends on your end card**. The tool stops the animation on its
-last frame to meet spec, and Figma exports seamless loops whose last frame is the first.
+## Best practice when building the file
+
+These are the things that actually decide whether an ad fits, ranked by how much
+difference they make.
+
+**1. End on your end card.** The animation has to stop to meet spec, and it freezes on
+whatever the last frame is. Figma builds seamless loops, so a loop that returns to the
+start will freeze on frame one with no call to action. Build the timeline so the end
+card is genuinely last, then check it on the Inspect tab with *Jump to end frame*.
+
+**2. Only use transparency where you actually need it.** This is the single biggest
+lever on file size. An image with an alpha channel has to ship as PNG, which costs
+roughly **ten times** what the same picture costs as a JPEG. If a layer sits on a solid
+background, give it that background in Figma so it exports opaque. Save transparency for
+cutouts that genuinely need it.
+
+**3. Crop transparent images to their content.** A cutout that is mostly empty space is
+paying full price for pixels nobody sees. Trim the frame to the artwork.
+
+**4. Place images near the size they appear.** A 4000px photo sitting in a 1080px frame
+exports at 4000px. The tool will resample it, but it can only spend the budget once —
+start close to the final size and it spends it on things you can see.
+
+**5. Reuse one image rather than duplicating it.** Identical images are detected and
+shipped once, so placing the same texture or logo five times costs what one costs.
+Five near-identical variants cost five times as much.
+
+**6. Flatten live blur effects.** Gaussian blur is recalculated every frame and is a
+common reason an ad gets pulled for CPU load on weak devices. If blurred artwork never
+changes, flatten it into an image layer in Figma. The tool warns past eight live blurs.
+
+**7. Prefer linear gradients.** Diamond and angular gradients have no SVG equivalent, so
+Figma fakes them with mirrored rectangles and a clip path. The tool repairs the two ways
+that goes wrong, but a linear gradient needs no repair at all.
+
+**8. Watch the vector artwork itself.** Shapes, paths, effects and keyframes all have
+weight before a single image is counted. A very complex illustration can blow the budget
+on its own, and no amount of image compression will save it — the tool will tell you when
+that is what is happening.
+
+**9. Keep it within 15 seconds.** That is the ceiling for the whole animation including
+repeats, so a 5-second loop can play three times and a 10-second loop can only play once.
+
+**10. Everything must be inside the file.** No linked images, no fonts loaded from the
+web, no external anything. Ticking *Outline text* covers the font half of this.
 
 ## What it does automatically
 

@@ -348,8 +348,17 @@ function inspect(text) {
   const vb = (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
   const width = parseFloat(svg.getAttribute("width")) || (vb.length === 4 ? vb[2] : 0);
   const height = parseFloat(svg.getAttribute("height")) || (vb.length === 4 ? vb[3] : 0);
+  // How many screen pixels one user unit covers. A viewBox far smaller than the
+  // pixel size magnifies every coordinate, so rounding has to follow it.
+  const viewBoxScale = (vb.length === 4 && vb[2] > 0 && width) ? width / vb[2] : 1;
 
-  const css = [...doc.querySelectorAll("style")].map(s => s.textContent).join("\n");
+  // Animations can live in a <style> block or in an inline style attribute, and
+  // missing the inline ones means reporting an ad as finite while it loops forever.
+  const styleEls = [...doc.querySelectorAll("style")];
+  const inlineAnimated = [...doc.querySelectorAll("[style]")]
+    .filter(e => /animation/i.test(e.getAttribute("style") || ""));
+  const css = styleEls.map(s => s.textContent).join("\n")
+    + "\n" + inlineAnimated.map(e => e.getAttribute("style")).join(";\n");
   const keyframes = (css.match(/@keyframes/g) || []).length;
   const smil = doc.querySelectorAll("animate, animateTransform, animateMotion").length;
 
@@ -375,7 +384,9 @@ function inspect(text) {
   }))];
 
   return {
-    text, doc, svg, width, height, css, keyframes, smil, cycle, images, diamond,
+    text, doc, svg, width, height, viewBoxScale, css, keyframes, smil, cycle, images, diamond,
+    blurs: doc.querySelectorAll("feGaussianBlur").length,
+    media: doc.querySelectorAll("audio, video").length,
     infinite: /\binfinite\b/.test(css) || !!doc.querySelector('[repeatCount="indefinite"]'),
     scripts: [...doc.querySelectorAll("script")],
     textNodes: doc.querySelectorAll("text").length,
@@ -515,6 +526,39 @@ const RULES = [
         "Figma leaves these gradients in canvas coordinates while moving the shape into local ones, which slices the artwork, and builds them from four mirrored rectangles whose shared edges show as a faint cross. Both the offset and the seams have been corrected.");
     } },
 
+  { id: "media", title: "No audio or video",
+    run(ctx) {
+      if (!ctx.media) return pass("none");
+      return block(`${ctx.media} <audio> or <video> element(s).`,
+        "Display creatives can't carry autoplaying media. Remove them in Figma, or deliver this as a video format instead.");
+    } },
+
+  { id: "filter-bounds", title: "Filter regions are valid",
+    run(ctx) {
+      const repaired = [];
+      for (const f of ctx.doc.querySelectorAll("filter")) {
+        let touched = false;
+        for (const a of ["x", "y", "width", "height"]) {
+          const v = f.getAttribute(a);
+          if (v !== null && !isFinite(parseFloat(v))) {
+            f.setAttribute(a, (a === "x" || a === "y") ? "-10%" : "120%");
+            touched = true;
+          }
+        }
+        if (touched) repaired.push(f.getAttribute("id") || "(unnamed)");
+      }
+      if (!repaired.length) return pass("all valid");
+      return fixed(`Repaired ${repaired.length} filter region(s).`,
+        'Figma writes x="inf" width="-inf" when it cannot work out a filter\'s bounds. Browsers fall back to the default region so it still renders, but it throws console errors and gives a validator something to object to. Replaced with the standard default.');
+    } },
+
+  { id: "render-cost", title: "Render cost",
+    run(ctx) {
+      if (ctx.blurs <= 8) return pass(`${ctx.blurs} blur filter(s)`);
+      return warn(`${ctx.blurs} blur filters`,
+        "Gaussian blur is recalculated every frame and is a common cause of an ad being pulled for CPU load on low-end devices. In Figma, flatten blurred artwork into an image layer rather than leaving a live blur effect on it.");
+    } },
+
   { id: "loop", title: "Animation stops instead of looping forever",
     run(ctx) {
       if (!ctx.infinite) return pass("already finite");
@@ -526,6 +570,13 @@ const RULES = [
       ctx.loops = loops;
       for (const s of ctx.doc.querySelectorAll("style"))
         s.textContent = s.textContent.replace(/\binfinite\b/g, `${loops} forwards`);
+      // inline style attributes too, or an ad can ship looping forever while
+      // every check reports it as capped
+      for (const el of ctx.doc.querySelectorAll("[style]")) {
+        const v = el.getAttribute("style") || "";
+        if (/animation/i.test(v) && /\binfinite\b/.test(v))
+          el.setAttribute("style", v.replace(/\binfinite\b/g, `${loops} forwards`));
+      }
       ctx.doc.querySelectorAll('[repeatCount="indefinite"]')
         .forEach(el => el.setAttribute("repeatCount", String(loops)));
       return fixed(`Capped at ${loops} play${loops === 1 ? "" : "s"} (${(loops * ctx.cycle).toFixed(1)}s), holding the last frame.`,
@@ -537,6 +588,7 @@ const pass  = (detail) => ({ status: "pass", detail });
 const fixed = (detail, note) => ({ status: "fixed", detail, note });
 const block = (detail, todo) => ({ status: "block", detail, todo });
 const info  = (detail) => ({ status: "info", detail });
+const warn  = (detail, note) => ({ status: "warn", detail, note });
 
 /* ------------------------------------------------------------- minify ---- */
 // Geometry only. Path coordinates are in user units, so 2 decimals is far below
@@ -557,7 +609,9 @@ function serialize(doc) {
 }
 
 /* --------------------------------------------------- build the ad shell --- */
-function buildHtml(svgMarkup, w, h, title) {
+function buildHtml(svgMarkup, w, h, title, clickId, rootId) {
+  clickId = clickId || "ad-clickthrough";
+  rootId = rootId || "ad-root";
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -586,20 +640,31 @@ function buildHtml(svgMarkup, w, h, title) {
   <\/script>
   <style>
     html, body { margin: 0; padding: 0; width: ${w}px; height: ${h}px; overflow: hidden; background: #000; }
-    #ad-root { position: relative; width: ${w}px; height: ${h}px; }
-    #ad-root > svg { display: block; width: ${w}px; height: ${h}px; }
-    #ad-clickthrough { position: absolute; top: 0; left: 0; width: ${w}px; height: ${h}px; cursor: pointer; }
+    #${rootId} { position: relative; width: ${w}px; height: ${h}px; }
+    #${rootId} > svg { display: block; width: ${w}px; height: ${h}px; }
+    /* !important so a stylesheet inside the artwork can't hide the click layer */
+    #${clickId} {
+      position: absolute !important; top: 0 !important; left: 0 !important;
+      width: ${w}px !important; height: ${h}px !important;
+      display: block !important; visibility: visible !important;
+      opacity: 1 !important; pointer-events: auto !important;
+      z-index: 2147483647 !important; cursor: pointer;
+    }
   </style>
 </head>
 <body>
-  <div id="ad-root">
+  <div id="${rootId}">
 ${svgMarkup}
-    <div id="ad-clickthrough"></div>
+    <div id="${clickId}"></div>
   </div>
   <script type="text/javascript">
-    document.getElementById('ad-clickthrough').addEventListener('click', function () {
-      if (clickTag) { window.open(clickTag, '_blank'); }
-    });
+    (function () {
+      var el = document.getElementById('${clickId}');
+      if (!el) { return; }
+      el.addEventListener('click', function () {
+        if (clickTag) { window.open(clickTag, '_blank'); }
+      });
+    })();
   <\/script>
 </body>
 </html>`;
@@ -623,13 +688,29 @@ async function run(file) {
   const longest = Math.max(ctx.width, ctx.height);
   const budget = SPEC.maxZipKB * 1024;
 
-  minifyGeometry(ctx.doc, 2);
+  // Round coordinates relative to how much screen space a user unit covers, so a
+  // small viewBox blown up to a large canvas doesn't get visibly distorted.
+  const decimals = Math.min(6, Math.max(1, Math.ceil(Math.log10(ctx.viewBoxScale || 1) + 1.4)));
+  minifyGeometry(ctx.doc, decimals);
 
-  // decode every embedded raster once so the ladder can re-encode cheaply
-  const decoded = [];
+  // The ad shell owns these ids. If the artwork already uses one, getElementById
+  // would return the artwork's element and the ad would stop being clickable.
+  let suffix = "", n = 2;
+  while (ctx.doc.querySelector(`[id="ad-root${suffix}"], [id="ad-clickthrough${suffix}"]`))
+    suffix = "-" + n++;
+  const rootId = "ad-root" + suffix, clickId = "ad-clickthrough" + suffix;
+
+  // One decode per distinct image: a logo placed four times should cost its bytes
+  // once, not four times.
+  const groups = new Map();
   for (const im of ctx.images) {
-    const img = await loadImage(im.href);
-    decoded.push({ ...im, img, alpha: usesAlpha(img) });
+    if (!groups.has(im.href)) groups.set(im.href, { href: im.href, els: [] });
+    groups.get(im.href).els.push(im.el);
+  }
+  const decoded = [];
+  for (const g of groups.values()) {
+    const img = await loadImage(g.href);
+    decoded.push({ href: g.href, els: g.els, img, alpha: usesAlpha(img) });
   }
 
   // Rasters ship as separate files so nothing pays the 33% base64 tax, kept flat
@@ -637,14 +718,16 @@ async function run(file) {
   decoded.forEach((d, i) => {
     d.type = d.alpha ? SPEC.formatAlpha : SPEC.formatOpaque;
     d.file = `img${i}.${d.type === "image/png" ? "png" : "jpg"}`;
-    d.el.setAttribute("href", d.file);
-    d.el.removeAttributeNS(XLINK, "href");
+    d.els.forEach(el => {
+      el.setAttribute("href", d.file);
+      el.removeAttributeNS(XLINK, "href");
+    });
   });
 
   // Vector markup is a fixed cost that no amount of image crushing can move.
   // Measure it first, so images are never degraded to chase a budget the
   // artwork itself is blowing.
-  const markupHtml = buildHtml(serialize(ctx.doc), ctx.width, ctx.height, name);
+  const markupHtml = buildHtml(serialize(ctx.doc), ctx.width, ctx.height, name, clickId, rootId);
   const markupBytes = new TextEncoder().encode(markupHtml);
   const markupZipped = (await deflateRaw(markupBytes)).length;
 

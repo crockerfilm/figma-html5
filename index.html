@@ -205,10 +205,12 @@ const SPEC = {
   formatOpaque: "image/jpeg",
   formatAlpha: "image/png",
 
-  // Resolution ladder, as fractions of the canvas's longest edge. Relative, so
-  // it means the same thing on a 300x250 as on a 1080x1080, and nothing is ever
-  // upscaled past its source. Each image is sized independently against measured
-  // encoded bytes — no assumptions about what any image contains.
+  // Resolution ladder, as fractions of the size each image is actually drawn at
+  // on the canvas. Rung 0 is a 1:1 pixel match, and nothing is ever upscaled past
+  // its source. Being relative to the image rather than the canvas means a small
+  // decorative element is never encoded at hero resolution, and a hero is never
+  // starved to pay for one. Each image picks its own rung against measured encoded
+  // bytes — no assumptions about what any image contains.
   ladder: [1, 0.8, 0.65, 0.5, 0.4, 0.32, 0.25, 0.2, 0.15, 0.1]
 };
 

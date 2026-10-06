@@ -107,7 +107,7 @@ const SPEC = {
 const $ = id => document.getElementById(id);
 // Split an animation shorthand on the commas between animations — not the
 // ones inside cubic-bezier(…) or steps(…), which once misread durations.
-function splitAnimations(value) {
+function splitAnimationsRaw(value) {
   const out = [];
   let depth = 0, cur = "";
   for (const ch of value) {
@@ -116,8 +116,9 @@ function splitAnimations(value) {
     if (ch === "," && depth === 0) { out.push(cur); cur = ""; } else cur += ch;
   }
   out.push(cur);
-  return out.map(seg => seg.replace(/\([^)]*\)/g, " "));   // drop function arguments
+  return out;
 }
+const splitAnimations = value => splitAnimationsRaw(value).map(seg => seg.replace(/\([^)]*\)/g, " "));   // drop function arguments
 const kb = n => (n / 1024).toFixed(1) + " KB";
 const fmt = n => n >= 1048576 ? (n / 1048576).toFixed(2) + " MB" : kb(n);
 const XLINK = "http://www.w3.org/1999/xlink";
@@ -537,6 +538,112 @@ const block = (detail, todo) => ({ status: "block", detail, todo });
 const info  = (detail) => ({ status: "info", detail });
 const warn  = (detail, note) => ({ status: "warn", detail, note });
 
+/* ------------------------------------------------------------ looping ---- */
+// Plays, and a pause between them, chosen by the person rather than inherited
+// from the export. Every animation is moved onto one shared cycle — the whole
+// timeline plus the pause — so layers stay in step on every play: each keyframe
+// lands where it falls in that cycle, and the first and last frames are held
+// before and after it. The last play stops the moment the motion ends (a
+// fractional iteration count) and holds the end frame, so the total is
+// plays × timeline + (plays − 1) × pause, never an extra trailing pause.
+const ANIM_TIMING = /^(ease|ease-in|ease-out|ease-in-out|linear|step-start|step-end)$/;
+function parseAnimation(seg) {
+  const fnRe = /(cubic-bezier|steps|linear)\([^)]*\)/g;
+  const fns = seg.match(fnRe) || [];
+  const a = { name: "", times: [], timing: fns[0] || "", count: "1", direction: "normal" };
+  for (const t of seg.replace(fnRe, " ").trim().split(/\s+/).filter(Boolean)) {
+    if (/^-?[\d.]+m?s$/.test(t)) a.times.push(t.endsWith("ms") ? parseFloat(t) / 1000 : parseFloat(t));
+    else if (/^(infinite|\d+(\.\d+)?)$/.test(t)) a.count = t;
+    else if (ANIM_TIMING.test(t)) a.timing = t;
+    else if (/^(normal|reverse|alternate|alternate-reverse)$/.test(t)) a.direction = t;
+    else if (/^(none|forwards|backwards|both|running|paused)$/.test(t)) { /* replaced below */ }
+    else a.name = t;
+  }
+  a.duration = a.times[0] || 0;
+  a.delay = Math.max(0, a.times[1] || 0);
+  return a;
+}
+
+// @keyframes blocks in a stylesheet, with where each sits in the text.
+function keyframeBlocks(text) {
+  const out = [];
+  const re = /@keyframes\s+([\w-]+)\s*\{/g;
+  let m;
+  while ((m = re.exec(text))) {
+    let depth = 1, i = re.lastIndex;
+    for (; i < text.length && depth; i++) { if (text[i] === "{") depth++; else if (text[i] === "}") depth--; }
+    const inner = text.slice(re.lastIndex, i - 1);
+    const frames = [];
+    for (const f of inner.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+      for (const sel of f[1].split(",").map(x => x.trim()))
+        frames.push({ p: sel === "from" ? 0 : sel === "to" ? 100 : parseFloat(sel), body: f[2] });
+    frames.sort((a, b) => a.p - b.p);
+    out.push({ name: m[1], start: m.index, end: i, frames });
+    re.lastIndex = i;
+  }
+  return out;
+}
+
+function applyLoop(doc, plays, pause) {
+  const styles = [...doc.querySelectorAll("style")];
+  const inline = [...doc.querySelectorAll("[style]")].filter(e => /animation\s*:/i.test(e.getAttribute("style") || ""));
+  const declRe = /((?:^|[;{\s])animation\s*:\s*)([^;}]+)/g;
+  if ([...doc.querySelectorAll("animate, animateTransform, animateMotion, set")].length)
+    return { ok: false, reason: "this file animates with SMIL tags, which can't be re-timed" };
+  if (styles.some(s => /animation-(name|duration|delay|iteration-count)\s*:/.test(s.textContent)))
+    return { ok: false, reason: "its animation is written in long form, which can't be re-timed" };
+
+  const uses = [];
+  const collect = text => { for (const m of text.matchAll(declRe)) for (const seg of splitAnimationsRaw(m[2])) { const a = parseAnimation(seg); if (a.name) uses.push(a); } };
+  styles.forEach(st => collect(st.textContent));
+  inline.forEach(e => collect(e.getAttribute("style")));
+  if (!uses.length) return { ok: false, reason: "no CSS animation was found" };
+  if (uses.some(a => a.direction !== "normal")) return { ok: false, reason: "some animation plays in reverse or alternates" };
+
+  const blocks = new Map();
+  for (const st of styles) for (const b of keyframeBlocks(st.textContent)) if (!blocks.has(b.name)) blocks.set(b.name, b);
+  const T = Math.max(...uses.map(a => a.delay + a.duration));
+  if (!(T > 0)) return { ok: false, reason: "the animation has no length" };
+  const H = plays > 1 ? Math.max(0, pause) : 0, C = T + H;
+  const count = plays > 1 ? +(plays - H / C).toFixed(4) : 1;
+  const pct = t => `${+(Math.min(1, Math.max(0, t / C)) * 100).toFixed(3)}%`;
+  const still = body => body.replace(/(-webkit-)?animation-timing-function\s*:[^;}]*;?/g, "");
+  const remap = (name, b, delay, dur) => {
+    const f = b.frames, out = [];
+    if (!f.length) return `@keyframes ${name}{}`;
+    if (delay > 0) out.push(`0%{${still(f[0].body)}}`);
+    for (const x of f) out.push(`${pct(delay + x.p / 100 * dur)}{${x.body}}`);
+    if (delay + dur < C - 1e-6) out.push(`100%{${still(f[f.length - 1].body)}}`);
+    return `@keyframes ${name}{${out.join("")}}`;
+  };
+
+  // A keyframes block used once is rewritten in place; one shared by several
+  // animations with different timings gets a copy per animation.
+  const usage = new Map();
+  uses.forEach(a => usage.set(a.name, (usage.get(a.name) || 0) + 1));
+  const inPlace = new Map(), copies = [];
+  let k = 0;
+  const rewrite = seg => {
+    const a = parseAnimation(seg);
+    if (!a.name || !blocks.has(a.name)) return seg;
+    let name = a.name;
+    if (usage.get(a.name) > 1) { name = `${a.name}-p${k++}`; copies.push(remap(name, blocks.get(a.name), a.delay, a.duration)); }
+    else inPlace.set(a.name, remap(name, blocks.get(a.name), a.delay, a.duration));
+    return `${name} ${+C.toFixed(4)}s ${a.timing || "ease"} 0s ${count} normal both`;
+  };
+  const rewriteDecls = text => text.replace(declRe, (m, pre, val) => pre + splitAnimationsRaw(val).map(rewrite).join(","));
+  for (const st of styles) st.textContent = rewriteDecls(st.textContent);
+  for (const e of inline) e.setAttribute("style", rewriteDecls(e.getAttribute("style")));
+  for (const st of styles) {
+    let text = st.textContent;
+    for (const b of keyframeBlocks(text).reverse())
+      if (inPlace.has(b.name)) text = text.slice(0, b.start) + inPlace.get(b.name) + text.slice(b.end);
+    st.textContent = text;
+  }
+  if (copies.length && styles[0]) styles[0].textContent += "\n" + copies.join("\n");
+  return { ok: true, timeline: T, total: plays * T + (plays - 1) * H };
+}
+
 /* ------------------------------------------------------------- minify ---- */
 // Geometry only. Path coordinates are in user units, so 2 decimals is far below
 // one pixel. CSS is left alone: keyframe matrices carry scale factors like
@@ -621,7 +728,9 @@ ${svgMarkup}
 }
 
 /* ============================================================== pipeline == */
-async function run(file) {
+// opts.plays: "auto" (as exported — an infinite loop is capped to fit the spec)
+// or 1–3; opts.pause: seconds the end frame holds between plays.
+async function run(file, opts = {}) {
   const ctx = inspect(await file.text());
   const results = [];
 
@@ -631,6 +740,25 @@ async function run(file) {
     results.push({ rule, ...r });
     if (r.status === "block" && ["dimensions", "animation"].includes(rule.id)) {
       return { ctx, results, blocked: true };
+    }
+  }
+
+  // Plays chosen by the person replace whatever looping the export had.
+  if (opts.plays && opts.plays !== "auto") {
+    const plays = Math.max(1, Math.min(SPEC.maxLoops, Number(opts.plays) || 1));
+    const pause = plays > 1 ? Math.max(0, Number(opts.pause) || 0) : 0;
+    const playsRule = { id: "plays", title: "Plays" };
+    const loop = applyLoop(ctx.doc, plays, pause);
+    if (!loop.ok) {
+      results.push({ rule: playsRule, ...warn(`The number of plays couldn't be set: ${loop.reason}. Left as exported.`, "") });
+    } else {
+      const i = results.findIndex(x => x.rule.id === "loop");
+      if (i >= 0) results.splice(i, 1);   // superseded: the plays are now set explicitly
+      const what = plays === 1 ? "Plays once" : `${plays} plays${pause ? `, ${pause}s pause between` : ""}`;
+      results.push({ rule: playsRule, ...(loop.total > SPEC.maxAnimationSeconds + 1e-6
+        ? block(`${what}: ${loop.total.toFixed(1)}s in total, over the ${SPEC.maxAnimationSeconds}s limit.`,
+                `Choose fewer plays or a shorter pause. One play is ${loop.timeline.toFixed(1)}s.`)
+        : pass(`${what} — ${loop.total.toFixed(1)}s in total, ending on the last frame.`)) });
     }
   }
 
@@ -1645,6 +1773,7 @@ function renderLayout(msg) {
 // and packages it with the web tool's own converter), then download them all
 // as one zip. Blocked banners are left out of the zip, as on the web tool.
 let exportPlan = [], built = new Map(), building = false, uiStop = false, previewId = null;
+let exportLoop = { plays: 1, pause: 0 };
 const waiting = new Map();   // banner id → resolver for its "exported" message
 
 const slug = s => String(s).replace(/×/g, "x").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "banner";
@@ -1678,6 +1807,40 @@ function renderExport(msg) {
   const card = el("div", "card");
   card.appendChild(el("b", null, `${exportPlan.length} banner${exportPlan.length === 1 ? "" : "s"} to export`));
   card.appendChild(el("div", "muted", "Each is exported from Figma, its Motion animation rebuilt as CSS, then checked and packaged exactly as the web tool does. Click a banner once built to preview it."));
+
+  // Plays and a pause between them — the same option as the web tool. The
+  // banners are packaged with it, so changing it means building again.
+  const opts = el("div", "btns");
+  opts.style.cssText = "margin-top:8px;align-items:center";
+  const plays = el("select");
+  for (const [v, t] of [["1", "Plays once"], ["2", "2 plays"], ["3", "3 plays"]]) { const o = el("option", null, t); o.value = v; plays.appendChild(o); }
+  plays.value = String(exportLoop.plays);
+  const pause = el("input");
+  pause.type = "number"; pause.min = 0; pause.max = 10; pause.step = 0.5; pause.value = exportLoop.pause; pause.style.width = "56px";
+  const pauseLab = el("label");
+  pauseLab.style.cssText = "display:flex;gap:4px;align-items:center";
+  pauseLab.appendChild(document.createTextNode("Pause between plays"));
+  pauseLab.appendChild(pause);
+  pauseLab.appendChild(document.createTextNode("s"));
+  const sync = () => { pause.disabled = plays.value === "1"; pauseLab.style.opacity = pause.disabled ? 0.4 : 1; };
+  const changed = () => {
+    exportLoop = { plays: Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0) };
+    sync();
+    if (built.size) {
+      built = new Map();
+      previewId = null;
+      out.querySelectorAll("input.xb").forEach(c => { delete c.dataset.built; setStatus(c.dataset.id, "Plays changed — build again"); });
+      const pv = document.getElementById("xpreview"); if (pv) pv.classList.add("hidden");
+    }
+    exportButton();
+  };
+  plays.addEventListener("change", changed);
+  pause.addEventListener("change", changed);
+  for (const c of [plays, pause]) c.style.cssText += ";background:var(--figma-color-bg-secondary);color:var(--figma-color-text);border:1px solid var(--figma-color-border);border-radius:4px;padding:3px 4px;font:inherit";
+  opts.appendChild(plays);
+  opts.appendChild(pauseLab);
+  sync();
+  card.appendChild(opts);
   const list = el("div");
   list.id = "xlist";
   for (const b of exportPlan) {
@@ -1728,7 +1891,7 @@ async function buildOne(b) {
   const named = /^\d+x\d+$/.test(slug(payload.name)) || /^frame-?\d*$/i.test(slug(payload.name)) ? "" : `_${slug(payload.name)}`;
   const words = slug((payload.headline || "").split(" ").slice(0, 4).join(" "));
   const fileName = `${slug(payload.parent)}${named}${words ? "_" + words : ""}`;
-  const outp = await Converter.run({ name: `${fileName}.svg`, text: async () => anim.svg });
+  const outp = await Converter.run({ name: `${fileName}.svg`, text: async () => anim.svg }, exportLoop);
   // Motion that couldn't be carried across goes in the report as warnings.
   for (const note of anim.notes) outp.results.push({ rule: { id: "motion", title: "Motion" }, status: "warn", detail: note });
   // The delivered ad must be exactly the frame's size, and the frame exactly the
@@ -1764,7 +1927,8 @@ async function buildOne(b) {
       presets: a.presets, trace: a.trace, animations: a.animations })),
     presetsOfferedToPlugins: payload.offered,
     svgKB: Math.round(payload.svg.length / 1024) }, null, 1);
-  return { picked: true, ok, out: outp, notes: anim.notes, duration: anim.duration, fileName, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
+  const plays = exportLoop.plays, total = plays * anim.duration + (plays - 1) * (plays > 1 ? exportLoop.pause : 0);
+  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, onePlay: anim.duration, fileName, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
 }
 
 async function buildAll() {

@@ -67,6 +67,11 @@ web tool's own checks and packaging. Click a built banner to preview it with a s
 headline, size, KB, length, notes). Banners that don't meet spec are left out, as on the
 web tool.
 
+**Plays** (once, 2 or 3) and **Pause between plays** sit above the list and are the same
+option as on the web tool: the end frame holds for the pause, then the animation replays,
+and the last play ends on the end frame. Total time is plays × length + the pauses between,
+and must stay within 15 s. Changing them after building marks the banners to build again.
+
 The export works on a temporary copy placed on its own at the top of the page — components
 on the copy are detached and its animation cleared so it exports at rest — then deleted;
 the banner itself is never changed. Motion is rebuilt from each preset's settings (Figma

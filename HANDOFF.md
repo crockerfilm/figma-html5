@@ -348,7 +348,14 @@ Not yet verified against Figma playback: rotation, scale, diagonal and custom po
 presets (flagged in each export's report), and whether re-applying a preset with both its
 offset and `delay` set (kept equal) ever double-counts.
 
-Web tool changes in the same pass (`BUILD 2026-10-06a`, not yet deployed): Inspect now reads
+**Plays and pause** (web tool Convert tab and plugin Export): `applyLoop()` in the shared
+converter moves every animation onto one cycle (timeline + pause), remaps keyframes into
+it, and uses a fractional iteration count so the last play stops on the end frame — total
+= plays × timeline + (plays − 1) × pause. "As exported" (web tool default) keeps the old
+behaviour. SMIL, long-form and reversed/alternating animation can't be re-timed and are
+left as exported with a warning.
+
+Web tool changes in the same pass (`BUILD 2026-10-06b`, not yet deployed): Inspect now reads
 inline-style, long-form and SMIL loops; animation shorthands split correctly around
 `cubic-bezier(…)`; capping a long-form infinite loop writes valid CSS; the click handler
 re-checks clickTag is http(s) at click time (matching an approved client banner); the ad's

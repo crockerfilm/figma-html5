@@ -923,6 +923,7 @@ function renderLayout(msg) {
 // and packages it with the web tool's own converter), then download them all
 // as one zip. Blocked banners are left out of the zip, as on the web tool.
 let exportPlan = [], built = new Map(), building = false, uiStop = false, previewId = null;
+let exportLoop = { plays: 1, pause: 0 };
 const waiting = new Map();   // banner id → resolver for its "exported" message
 
 const slug = s => String(s).replace(/×/g, "x").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "banner";
@@ -956,6 +957,40 @@ function renderExport(msg) {
   const card = el("div", "card");
   card.appendChild(el("b", null, `${exportPlan.length} banner${exportPlan.length === 1 ? "" : "s"} to export`));
   card.appendChild(el("div", "muted", "Each is exported from Figma, its Motion animation rebuilt as CSS, then checked and packaged exactly as the web tool does. Click a banner once built to preview it."));
+
+  // Plays and a pause between them — the same option as the web tool. The
+  // banners are packaged with it, so changing it means building again.
+  const opts = el("div", "btns");
+  opts.style.cssText = "margin-top:8px;align-items:center";
+  const plays = el("select");
+  for (const [v, t] of [["1", "Plays once"], ["2", "2 plays"], ["3", "3 plays"]]) { const o = el("option", null, t); o.value = v; plays.appendChild(o); }
+  plays.value = String(exportLoop.plays);
+  const pause = el("input");
+  pause.type = "number"; pause.min = 0; pause.max = 10; pause.step = 0.5; pause.value = exportLoop.pause; pause.style.width = "56px";
+  const pauseLab = el("label");
+  pauseLab.style.cssText = "display:flex;gap:4px;align-items:center";
+  pauseLab.appendChild(document.createTextNode("Pause between plays"));
+  pauseLab.appendChild(pause);
+  pauseLab.appendChild(document.createTextNode("s"));
+  const sync = () => { pause.disabled = plays.value === "1"; pauseLab.style.opacity = pause.disabled ? 0.4 : 1; };
+  const changed = () => {
+    exportLoop = { plays: Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0) };
+    sync();
+    if (built.size) {
+      built = new Map();
+      previewId = null;
+      out.querySelectorAll("input.xb").forEach(c => { delete c.dataset.built; setStatus(c.dataset.id, "Plays changed — build again"); });
+      const pv = document.getElementById("xpreview"); if (pv) pv.classList.add("hidden");
+    }
+    exportButton();
+  };
+  plays.addEventListener("change", changed);
+  pause.addEventListener("change", changed);
+  for (const c of [plays, pause]) c.style.cssText += ";background:var(--figma-color-bg-secondary);color:var(--figma-color-text);border:1px solid var(--figma-color-border);border-radius:4px;padding:3px 4px;font:inherit";
+  opts.appendChild(plays);
+  opts.appendChild(pauseLab);
+  sync();
+  card.appendChild(opts);
   const list = el("div");
   list.id = "xlist";
   for (const b of exportPlan) {
@@ -1006,7 +1041,7 @@ async function buildOne(b) {
   const named = /^\d+x\d+$/.test(slug(payload.name)) || /^frame-?\d*$/i.test(slug(payload.name)) ? "" : `_${slug(payload.name)}`;
   const words = slug((payload.headline || "").split(" ").slice(0, 4).join(" "));
   const fileName = `${slug(payload.parent)}${named}${words ? "_" + words : ""}`;
-  const outp = await Converter.run({ name: `${fileName}.svg`, text: async () => anim.svg });
+  const outp = await Converter.run({ name: `${fileName}.svg`, text: async () => anim.svg }, exportLoop);
   // Motion that couldn't be carried across goes in the report as warnings.
   for (const note of anim.notes) outp.results.push({ rule: { id: "motion", title: "Motion" }, status: "warn", detail: note });
   // The delivered ad must be exactly the frame's size, and the frame exactly the
@@ -1042,7 +1077,8 @@ async function buildOne(b) {
       presets: a.presets, trace: a.trace, animations: a.animations })),
     presetsOfferedToPlugins: payload.offered,
     svgKB: Math.round(payload.svg.length / 1024) }, null, 1);
-  return { picked: true, ok, out: outp, notes: anim.notes, duration: anim.duration, fileName, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
+  const plays = exportLoop.plays, total = plays * anim.duration + (plays - 1) * (plays > 1 ? exportLoop.pause : 0);
+  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, onePlay: anim.duration, fileName, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
 }
 
 async function buildAll() {

@@ -67,6 +67,12 @@ web tool's own checks and packaging. Click a built banner to preview it with a s
 headline, size, KB, length, notes). Banners that don't meet spec are left out, as on the
 web tool.
 
+**Size fixes:** an export must be exactly its frame's size. On the export copy only (your
+frame is never changed), the plugin clips anything past the frame's edge and drops the
+frame's own drop shadow, and a frame named for a size but 1–2 px off is exported at the
+named size — each noted on the banner. A bigger name/size gap blocks with an **Export at
+W×H instead** button, since it may be deliberate.
+
 **Preview all** opens every built banner side by side in a larger window, each playing
 live: *Play all* restarts them together, one scrubber moves them all to the same moment,
 *End frames* shows each one's last frame. Filter to Ready or Not to spec; 12 per page.

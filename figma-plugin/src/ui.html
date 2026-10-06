@@ -37,6 +37,25 @@
     border-radius: 50%; background: var(--figma-color-text-brand); vertical-align: 1px;
     animation: blink 1s ease-in-out infinite; }
   @keyframes blink { 50% { opacity: .25; } }
+  .xhead { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .xhead .sum { color: var(--figma-color-text-secondary); }
+  .xhead .sp { flex: 1; }
+  .xhead a, .xrow .name { color: var(--figma-color-text-brand); cursor: pointer; }
+  .xgroup { margin-top: 10px; font-size: 11px; color: var(--figma-color-text-secondary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--figma-color-border); padding-bottom: 3px; }
+  .xrow { display: grid; grid-template-columns: 16px 1fr auto; gap: 2px 8px; align-items: center; padding: 5px 0; }
+  .xrow .name { font-weight: 600; }
+  .xrow .sub { color: var(--figma-color-text-secondary); font-weight: 400; margin-left: 4px; }
+  .xrow .why { grid-column: 2 / 4; font-size: 11px; color: var(--figma-color-text-secondary); }
+  .xrow .why.err { color: var(--figma-color-text-danger); }
+  .xrow .why button { margin-top: 4px; padding: 4px 10px; font-size: 11px; }
+  .pill { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 9px; white-space: nowrap;
+    background: var(--figma-color-bg-secondary); color: var(--figma-color-text-secondary); }
+  .pill.ok { background: rgba(20,174,92,.15); color: var(--figma-color-text-success); }
+  .pill.err { background: rgba(242,72,34,.15); color: var(--figma-color-text-danger); }
+  .pill.busy { color: var(--figma-color-text-brand); }
+  .xopts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 11px; color: var(--figma-color-text-secondary); }
+  .xopts select, .xopts input { background: var(--figma-color-bg-secondary); color: var(--figma-color-text); border: 1px solid var(--figma-color-border); border-radius: 4px; padding: 3px 4px; font: inherit; }
   #gallery { position: fixed; inset: 0; z-index: 10; background: var(--figma-color-bg, #fff); color: var(--figma-color-text, #111); display: flex; flex-direction: column; }
   #gallery .ghead { padding: 10px 14px; border-bottom: 1px solid var(--figma-color-border); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   #gallery .ggrid { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-wrap: wrap; gap: 16px; align-content: flex-start; }
@@ -70,7 +89,7 @@
     <button id="stop" class="danger hidden">Stop</button>
     <button id="clear" class="ghost" disabled>Remove animation from others</button>
   </div>
-  <div class="muted" style="margin-top:6px">Every run saves a restore point and a Figma version first. Use restore points, not ⌘Z — a long run lands as many undo steps.</div>
+  <div class="muted" style="margin-top:6px" title="⌘Z isn't reliable after a long run — it lands as many undo steps. Use restore points instead.">Every run is saved as a restore point and a Figma version.</div>
   <div class="muted" id="restoreRow" style="margin-top:6px">
     <span id="restoreText">Looking for restore points…</span> <a id="browse" class="hidden" style="color:var(--figma-color-text-brand);cursor:pointer">Browse restore points</a>
   </div>
@@ -636,10 +655,10 @@ function el(tag, cls, text) {
 }
 
 const HELP = {
-  content: "Select the banner you animated (or just its animated layers). Every layer on this page that shows the same copy, image or component gets the same animation, at any size.",
-  layout: "Select the banner(s) you animated. Every other banner of the same size gets the same animation in the same places, whatever copy, colour or image it has. Select one animated banner per size to cover a whole suite.",
-  export: "Select the banners to export as HTML5, or a Version frame or section that holds them. Each is checked against the same spec as the web tool; only banners that pass go in the download.",
-  suite: "Select the one banner you animated. The plugin plans how to copy its animation to every banner on this page, shows you the plan, and changes nothing until you click Copy."
+  content: "Select your animated banner. Its animation goes to every layer showing the same copy, picture or component.",
+  layout: "Select animated banner(s). Each one's animation goes to the same spots in every other banner its size.",
+  suite: "Select your one animated banner. The plugin plans its animation across every banner, and changes nothing until you copy.",
+  export: "Select banners, or a Version frame or section. Each is checked against the spec; only passing banners are downloaded."
 };
 document.querySelectorAll(".modes button").forEach(b => b.addEventListener("click", () => {
   document.querySelectorAll(".modes button").forEach(x => x.classList.toggle("on", x === b));
@@ -933,13 +952,15 @@ function renderLayout(msg) {
 // as one zip. Blocked banners are left out of the zip, as on the web tool.
 let exportPlan = [], built = new Map(), building = false, uiStop = false, previewId = null;
 let exportLoop = { plays: 1, pause: 0 };
+const fixSizeFor = new Set();   // banners the person chose to export at their named size
 const waiting = new Map();   // banner id → resolver for its "exported" message
 
 const slug = s => String(s).replace(/×/g, "x").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "banner";
 
 function exportButton() {
   const pa = document.getElementById("previewAll");
-  if (pa) { pa.classList.toggle("hidden", !built.size); pa.textContent = `Preview all ${built.size} side by side`; }
+  if (pa) { pa.classList.toggle("hidden", !built.size); pa.textContent = `Preview all ${built.size}`; }
+  updateSummary();
   const picked = [...out.querySelectorAll("input.xb:checked")];
   const ready = [...built.values()].filter(b => b.ok).length;
   go.classList.remove("danger");
@@ -964,26 +985,43 @@ function renderExport(msg) {
   // A new selection is a new export: earlier builds may be out of date.
   exportPlan = msg.banners;
   built = new Map();
+  fixSizeFor.clear();
   previewId = null;
   out.innerHTML = "";
   const card = el("div", "card");
-  card.appendChild(el("b", null, `${exportPlan.length} banner${exportPlan.length === 1 ? "" : "s"} to export`));
-  card.appendChild(el("div", "muted", "Each is exported from Figma, its Motion animation rebuilt as CSS, then checked and packaged exactly as the web tool does. Click a banner once built to preview it."));
+
+  // Count, live summary, and the gallery — everything about the batch on one line.
+  const head = el("div", "xhead");
+  head.appendChild(el("b", null, `${exportPlan.length} banner${exportPlan.length === 1 ? "" : "s"}`));
+  const sum = el("span", "sum"); sum.id = "xsum";
+  head.appendChild(sum);
+  head.appendChild(el("span", "sp"));
+  const all = el("a", "hidden", "Preview all"); all.id = "previewAll";
+  all.addEventListener("click", () => openGallery());
+  head.appendChild(all);
+  const pick = el("a", null, "Select none");
+  pick.addEventListener("click", () => {
+    const boxes = [...out.querySelectorAll("input.xb")], on = !boxes.every(c => c.checked);
+    boxes.forEach(c => { c.checked = on; });
+    pick.textContent = on ? "Select none" : "Select all";
+    exportButton();
+  });
+  head.appendChild(pick);
+  card.appendChild(head);
 
   // Plays and a pause between them — the same option as the web tool. The
   // banners are packaged with it, so changing it means building again.
-  const opts = el("div", "btns");
-  opts.style.cssText = "margin-top:8px;align-items:center";
+  const opts = el("div", "xopts");
   const plays = el("select");
-  for (const [v, t] of [["1", "Plays once"], ["2", "2 plays"], ["3", "3 plays"]]) { const o = el("option", null, t); o.value = v; plays.appendChild(o); }
+  for (const [v, t] of [["1", "Plays once"], ["2", "Plays twice"], ["3", "Plays 3 times"]]) { const o = el("option", null, t); o.value = v; plays.appendChild(o); }
   plays.value = String(exportLoop.plays);
   const pause = el("input");
-  pause.type = "number"; pause.min = 0; pause.max = 10; pause.step = 0.5; pause.value = exportLoop.pause; pause.style.width = "56px";
+  pause.type = "number"; pause.min = 0; pause.max = 10; pause.step = 0.5; pause.value = exportLoop.pause; pause.style.width = "48px";
   const pauseLab = el("label");
-  pauseLab.style.cssText = "display:flex;gap:4px;align-items:center";
-  pauseLab.appendChild(document.createTextNode("Pause between plays"));
+  pauseLab.style.cssText = "display:flex;gap:4px;align-items:center;margin:0";
+  pauseLab.appendChild(document.createTextNode("pause"));
   pauseLab.appendChild(pause);
-  pauseLab.appendChild(document.createTextNode("s"));
+  pauseLab.appendChild(document.createTextNode("s between"));
   const sync = () => { pause.disabled = plays.value === "1"; pauseLab.style.opacity = pause.disabled ? 0.4 : 1; };
   const changed = () => {
     exportLoop = { plays: Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0) };
@@ -991,41 +1029,47 @@ function renderExport(msg) {
     if (built.size) {
       built = new Map();
       previewId = null;
-      out.querySelectorAll("input.xb").forEach(c => { delete c.dataset.built; setStatus(c.dataset.id, "Plays changed — build again"); });
+      out.querySelectorAll("input.xb").forEach(c => { delete c.dataset.built; setStatus(c.dataset.id, "Build again"); });
       const pv = document.getElementById("xpreview"); if (pv) pv.classList.add("hidden");
     }
     exportButton();
   };
   plays.addEventListener("change", changed);
   pause.addEventListener("change", changed);
-  for (const c of [plays, pause]) c.style.cssText += ";background:var(--figma-color-bg-secondary);color:var(--figma-color-text);border:1px solid var(--figma-color-border);border-radius:4px;padding:3px 4px;font:inherit";
   opts.appendChild(plays);
   opts.appendChild(pauseLab);
   sync();
   card.appendChild(opts);
+
+  // Rows, grouped under where they sit so the long path shows once.
   const list = el("div");
   list.id = "xlist";
+  let group = null;
   for (const b of exportPlan) {
-    const row = el("div", "row");
+    if (b.where !== group) {
+      group = b.where;
+      const gh = el("div", "xgroup", group || "This page");
+      gh.title = group;
+      list.appendChild(gh);
+    }
+    const row = el("div", "xrow");
     const cb = el("input", "xb"); cb.type = "checkbox"; cb.checked = b.animated > 0; cb.dataset.id = b.id;
     cb.addEventListener("change", exportButton);
-    const txt = el("div");
-    const a = el("a", null, `${b.name}`);
-    a.addEventListener("click", () => showBanner(b.id));
-    txt.appendChild(a);
-    txt.appendChild(el("div", "where", `${b.where} · ${b.w}×${b.h} · ${b.animated} animated layer${b.animated === 1 ? "" : "s"}`));
-    const st = el("div", "where", built.has(b.id) ? statusText(built.get(b.id)) : "Not built yet");
-    st.id = `xs-${b.id}`;
-    txt.appendChild(st);
-    row.appendChild(cb); row.appendChild(txt);
+    const label = el("div");
+    const name = el("span", "name", `${b.w}×${b.h}`);
+    name.title = "Preview this banner";
+    name.addEventListener("click", () => showBanner(b.id));
+    label.appendChild(name);
+    if (!/^\d+\s*[x×]\s*\d+$/.test(b.name)) label.appendChild(el("span", "sub", b.name));
+    if (!b.animated) label.appendChild(el("span", "sub", "· no animation"));
+    const pill = el("span", "pill", "Not built");
+    pill.id = `xs-${b.id}`;
+    const why = el("div", "why");
+    why.id = `xw-${b.id}`;
+    row.appendChild(cb); row.appendChild(label); row.appendChild(pill); row.appendChild(why);
     list.appendChild(row);
   }
   card.appendChild(list);
-  const all = el("button", "ghost hidden", "Preview all");
-  all.id = "previewAll";
-  all.style.marginTop = "8px";
-  all.addEventListener("click", () => openGallery());
-  card.appendChild(all);
   out.appendChild(card);
   const pv = el("div", "card hidden");
   pv.id = "xpreview";
@@ -1042,11 +1086,53 @@ function statusText(b) {
     : `✓ Ready — ${Converter.kb(b.out.chosen.zipBytes)}, ${n3(b.duration)}s` + (warns ? ` · ${warns} note${warns === 1 ? "" : "s"}` : "");
 }
 
-function setStatus(id, text) { const s = document.getElementById(`xs-${id}`); if (s) s.textContent = text; }
+// A row's state while working: plain text in a neutral pill, no reason line.
+function setStatus(id, text) {
+  const s = document.getElementById(`xs-${id}`), w = document.getElementById(`xw-${id}`);
+  if (s) { s.textContent = text; s.className = "pill busy"; }
+  if (w) { w.innerHTML = ""; w.className = "why"; }
+}
+
+// A row's result: a short pill, and one line saying why — plus the fix, when
+// there's one to offer.
+function renderStatus(id, b) {
+  const s = document.getElementById(`xs-${id}`), w = document.getElementById(`xw-${id}`);
+  if (!s || !w) return;
+  w.innerHTML = "";
+  if (b.error) {
+    s.textContent = "Error"; s.className = "pill err";
+    w.className = "why err"; w.textContent = b.error;
+    return;
+  }
+  const blocks = b.out.results.filter(r => r.status === "block");
+  const notes = b.out.results.filter(r => r.status === "warn" || r.status === "fixed");
+  if (blocks.length) {
+    s.textContent = blocks.length > 1 ? `${blocks.length} to fix` : "To fix"; s.className = "pill err";
+    w.className = "why err";
+    w.appendChild(el("div", null, blocks[0].detail + (blocks[0].todo ? ` ${blocks[0].todo}` : "")));
+    if (b.offerSize) {
+      const btn = el("button", "ghost", `Export at ${b.offerSize} instead`);
+      btn.title = "Exports a resized copy; your frame in Figma isn't changed.";
+      btn.addEventListener("click", ev => { ev.stopPropagation(); fixSizeFor.add(id); built.delete(id); delete (out.querySelector(`input.xb[data-id="${id}"]`) || { dataset: {} }).dataset.built; buildAll(); });
+      w.appendChild(btn);
+    }
+    return;
+  }
+  s.textContent = `${Converter.kb(b.out.chosen.zipBytes)} · ${n3(b.duration)}s`; s.className = "pill ok";
+  w.className = "why";
+  if (notes.length) w.textContent = notes.map(n => n.detail).join(" ");
+}
+
+function updateSummary() {
+  const sum = document.getElementById("xsum");
+  if (!sum) return;
+  const rs = [...built.values()], ok = rs.filter(r => r.ok).length, bad = rs.length - ok;
+  sum.textContent = rs.length ? `· ${ok} ready${bad ? ` · ${bad} to fix` : ""}` : "";
+}
 
 async function buildOne(b) {
   setStatus(b.id, "Exporting from Figma…");
-  const payload = await new Promise(res => { waiting.set(b.id, res); parent.postMessage({ pluginMessage: { type: "exportBanner", id: b.id } }, "*"); });
+  const payload = await new Promise(res => { waiting.set(b.id, res); parent.postMessage({ pluginMessage: { type: "exportBanner", id: b.id, fixSize: fixSizeFor.has(b.id) } }, "*"); });
   if (payload.error) return { picked: true, ok: false, error: payload.error, payload: { name: b.name, where: b.where, width: b.w, height: b.h } };
   setStatus(b.id, "Rebuilding the animation…");
   await new Promise(r => setTimeout(r, 0));
@@ -1065,17 +1151,20 @@ async function buildOne(b) {
   // size its name promises. Either mismatch gets rejected by the ad server, so
   // both block rather than note.
   const sizeRule = { id: "frame-size", title: "Exports at the size the frame is meant to be" };
+  // Fixes the plugin made on its export copy (clipping, a pixel of resizing).
+  for (const f of payload.fixes || []) outp.results.push({ rule: { id: "size-fixed", title: "Fixed for export" }, status: "fixed", detail: f });
   if (outp.ctx && (outp.ctx.width !== payload.width || outp.ctx.height !== payload.height))
     outp.results.push(Object.assign({ rule: sizeRule }, {
       status: "block",
       detail: `The export came out ${outp.ctx.width}×${outp.ctx.height}, but the frame is ${payload.width}×${payload.height} — something renders past the frame's edge.`,
       todo: "Turn on Clip content for this frame, or move the overhanging layer (or its shadow) inside the edge." }));
   const promised = /^(\d+)\s*[x×]\s*(\d+)$/.exec(String(payload.name).trim());
-  if (promised && (+promised[1] !== payload.width || +promised[2] !== payload.height))
+  const offerSize = promised && (+promised[1] !== payload.width || +promised[2] !== payload.height) ? `${promised[1]}×${promised[2]}` : "";
+  if (offerSize)
     outp.results.push(Object.assign({ rule: sizeRule }, {
       status: "block",
       detail: `The frame is named ${promised[1]}×${promised[2]} but is actually ${payload.width}×${payload.height}.`,
-      todo: `Resize the frame to ${promised[1]}×${promised[2]} in Figma (or rename it if ${payload.width}×${payload.height} is the size you want).` }));
+      todo: `Resize the frame in Figma, or export a resized copy at ${promised[1]}×${promised[2]} below.` }));
 
   // If none of the animated layers converted, the web tool's "static export"
   // advice would mislead — say what actually happened instead.
@@ -1095,7 +1184,7 @@ async function buildOne(b) {
     presetsOfferedToPlugins: payload.offered,
     svgKB: Math.round(payload.svg.length / 1024) }, null, 1);
   const plays = exportLoop.plays, total = plays * anim.duration + (plays - 1) * (plays > 1 ? exportLoop.pause : 0);
-  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, onePlay: anim.duration, fileName, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
+  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, onePlay: anim.duration, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
 }
 
 async function buildAll() {
@@ -1113,7 +1202,7 @@ async function buildAll() {
     let r;
     try { r = await buildOne(b); } catch (e) { r = { picked: true, ok: false, error: String((e && e.message) || e), payload: { name: b.name, where: b.where, width: b.w, height: b.h } }; }
     built.set(id, r);
-    setStatus(id, statusText(r));
+    renderStatus(id, r);
     const cb = out.querySelector(`input.xb[data-id="${id}"]`);
     if (cb) cb.dataset.built = "1";
     if (previewId === null && r.ok) showBanner(id);
@@ -1154,7 +1243,8 @@ function showBanner(id) {
   pv.innerHTML = "";
   if (!b) { pv.appendChild(el("div", "muted", "Build this banner first to preview it.")); return; }
   previewId = id;
-  pv.appendChild(el("b", null, `${b.payload ? b.payload.where + " › " + b.payload.name : "Banner"}`));
+  // The full path already ends with the banner's name.
+  pv.appendChild(el("b", null, b.payload ? (b.payload.where.endsWith(b.payload.name) ? b.payload.where : `${b.payload.where} › ${b.payload.name}`) : "Banner"));
   if (b.error) { pv.appendChild(el("div", "err", b.error)); return; }
   pv.appendChild(el("div", b.ok ? "ok" : "err", statusText(b)));
 

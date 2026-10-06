@@ -1364,7 +1364,7 @@ function mergeAnimations(into, from) {
 // motion itself is read from the original's preset settings. The copy is
 // deleted afterwards. Always answers with an "exported" message — the panel
 // waits for one.
-async function exportBanner(id) {
+async function exportBanner(id, fixSize) {
   const skip = figma.skipInvisibleInstanceChildren;
   let copy = null;
   try {
@@ -1392,6 +1392,31 @@ async function exportBanner(id) {
       if (inst === copy) copy = f;
     }
     const twin = mirror(b, copy, new Map());
+
+    // Size fixes, on the copy only — the frame in Figma is never changed.
+    //  - Anything past the frame's edge can't be seen in the ad slot, but it
+    //    makes Figma's export bigger than the frame. Clip it.
+    //  - A frame named for one size but a pixel or two off is almost always a
+    //    slip; export it at the named size. A bigger gap may be deliberate, so
+    //    that only happens when the person asks (fixSize).
+    const fixes = [];
+    if ("clipsContent" in copy && !copy.clipsContent) {
+      copy.clipsContent = true;
+      fixes.push("Clip content was off, so anything past the frame's edge was trimmed for the export.");
+    }
+    if (Array.isArray(copy.effects) && copy.effects.some(e => e.type === "DROP_SHADOW" && e.visible !== false)) {
+      copy.effects = copy.effects.filter(e => e.type !== "DROP_SHADOW");
+      fixes.push("The frame's own drop shadow falls outside the ad, so it was left out of the export.");
+    }
+    const named = /^(\d+)\s*[x×]\s*(\d+)$/.exec(String(b.name).trim());
+    const frameW = Math.round(b.width), frameH = Math.round(b.height);
+    if (named && (+named[1] !== frameW || +named[2] !== frameH)) {
+      const nw = +named[1], nh = +named[2];
+      if (fixSize || (Math.abs(nw - frameW) <= 2 && Math.abs(nh - frameH) <= 2)) {
+        copy.resize(nw, nh);
+        fixes.push(`The frame is ${frameW}×${frameH} but named ${nw}×${nh}, so it was exported at ${nw}×${nh}. Resize the frame in Figma to match.`);
+      }
+    }
 
     // 1. At rest: no animation anywhere on the copy, so the export is the layout.
     for (const n of [copy].concat(copy.findAll(hasMotion))) {
@@ -1477,7 +1502,8 @@ async function exportBanner(id) {
     try { offered = figma.motion.figmaAnimationStyles().map(a => ({ name: a.name, styleId: a.styleId, props: a.props })); } catch (e) { /* none */ }
     say("");
     post({ type: "exported", id, name: b.name, where: where(b), full: fullWhere(b), parent: b.parent ? safeName(b.parent) : "",
-           width: Math.round(b.width), height: Math.round(b.height), headline, svg, anims, skipped: notes, offered });
+           width: Math.round(copy.width), height: Math.round(copy.height), frameW, frameH, fixes,
+           headline, svg, anims, skipped: notes, offered });
   } catch (e) {
     post({ type: "exported", id, error: `Figma couldn't export it: ${(e && e.message) || e}` });
   } finally {
@@ -1546,7 +1572,7 @@ figma.ui.onmessage = msg => {
   if (msg.type === "reviewGoBack") reviewGoBack(msg.id);
   if (msg.type === "goBack") runGoBack(msg.id, msg.expected);
   if (msg.type === "showPoint") runShowPoint(msg.id);
-  if (msg.type === "exportBanner") guard(exportBanner, "Exporting")(msg.id);
+  if (msg.type === "exportBanner") guard(exportBanner, "Exporting")(msg.id, !!msg.fixSize);
   if (msg.type === "select") runSelect(msg.ids);
   if (msg.type === "deletePoint") deletePoint(msg.id);
   if (msg.type === "stop") stopRequested = true;

@@ -182,6 +182,8 @@
 <script>
 "use strict";
 
+// @converter:start — everything down to @converter:end is also built into the
+// Figma plugin (figma-plugin/build.mjs). Keep it free of page-specific code.
 /* ============================================================================
  * SPEC
  * Seeded from a reference banner that passed its platform's spec checker:
@@ -215,6 +217,19 @@ const SPEC = {
 };
 
 const $ = id => document.getElementById(id);
+// Split an animation shorthand on the commas between animations — not the
+// ones inside cubic-bezier(…) or steps(…), which once misread durations.
+function splitAnimations(value) {
+  const out = [];
+  let depth = 0, cur = "";
+  for (const ch of value) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth = Math.max(0, depth - 1);
+    if (ch === "," && depth === 0) { out.push(cur); cur = ""; } else cur += ch;
+  }
+  out.push(cur);
+  return out.map(seg => seg.replace(/\([^)]*\)/g, " "));   // drop function arguments
+}
 const kb = n => (n / 1024).toFixed(1) + " KB";
 const fmt = n => n >= 1048576 ? (n / 1048576).toFixed(2) + " MB" : kb(n);
 const XLINK = "http://www.w3.org/1999/xlink";
@@ -366,8 +381,8 @@ function inspect(text) {
 
   let cycle = 0;
   for (const decl of css.match(/animation\s*:\s*[^;}]+/g) || []) {
-    for (const seg of decl.replace(/animation\s*:\s*/, "").split(",")) {
-      const times = seg.match(/-?[\d.]+m?s/g) || [];
+    for (const seg of splitAnimations(decl.replace(/animation\s*:\s*/, ""))) {
+      const times = seg.match(/-?[\d.]+m?s\b/g) || [];
       const sec = t => t.endsWith("ms") ? parseFloat(t) / 1000 : parseFloat(t);
       cycle = Math.max(cycle, (times[0] ? sec(times[0]) : 0) + Math.max(0, times[1] ? sec(times[1]) : 0));
     }
@@ -607,14 +622,19 @@ const RULES = [
         ? Math.max(1, Math.min(SPEC.maxLoops, Math.floor(SPEC.maxAnimationSeconds / ctx.cycle)))
         : 1;
       ctx.loops = loops;
+      // The long form takes a bare count; the shorthand also gets "forwards"
+      // so the ad holds its last frame.
+      const cap = text => text
+        .replace(/(animation-iteration-count\s*:\s*)infinite/g, `$1${loops}`)
+        .replace(/\binfinite\b/g, `${loops} forwards`);
       for (const s of ctx.doc.querySelectorAll("style"))
-        s.textContent = s.textContent.replace(/\binfinite\b/g, `${loops} forwards`);
+        s.textContent = cap(s.textContent);
       // inline style attributes too, or an ad can ship looping forever while
       // every check reports it as capped
       for (const el of ctx.doc.querySelectorAll("[style]")) {
         const v = el.getAttribute("style") || "";
         if (/animation/i.test(v) && /\binfinite\b/.test(v))
-          el.setAttribute("style", v.replace(/\binfinite\b/g, `${loops} forwards`));
+          el.setAttribute("style", cap(v));
       }
       ctx.doc.querySelectorAll('[repeatCount="indefinite"]')
         .forEach(el => el.setAttribute("repeatCount", String(loops)));
@@ -657,7 +677,7 @@ function buildHtml(svgMarkup, w, h, title, clickId, rootId) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="ad.size" content="width=${w},height=${h}">
-  <title>${title}</title>
+  <title>${String(title).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c])}</title>
   <script type="text/javascript">
     // IAB clickTag. No landing page URL is stored in this file.
     // The ad server supplies it, either by appending ?clickTag=<encoded url>
@@ -701,7 +721,10 @@ ${svgMarkup}
       var el = document.getElementById('${clickId}');
       if (!el) { return; }
       el.addEventListener('click', function () {
-        if (clickTag) { window.open(clickTag, '_blank'); }
+        // Re-checked at click time: an ad server may overwrite clickTag after
+        // load, and only a web address should ever be opened.
+        var u = window.clickTag;
+        if (u && /^https?:\\/\\//i.test(u)) { window.open(u, '_blank'); }
       });
     })();
   <\/script>
@@ -877,6 +900,7 @@ async function run(file) {
 
   return { ctx, results, chosen, html, assets, name, blocked: false };
 }
+// @converter:end
 
 /* ------------------------------------------------------------------ ui --- */
 function render(out) {
@@ -1013,7 +1037,7 @@ $("dlZip").addEventListener("click", async () => {
  * lets you scrub the animation. Entirely separate from the convert pipeline
  * above; it reads what is in the file rather than rebuilding anything.
  * ========================================================================== */
-const BUILD = "2026-09-16b";
+const BUILD = "2026-10-06a";
 $("build").textContent = "build " + BUILD;
 $("ispecline").textContent = $("specline").textContent;
 
@@ -1053,11 +1077,13 @@ async function readZip(u8) {
 }
 
 // Reads the CSS animation shorthand the way a browser does: bare numbers are the
-// iteration count, everything with a unit is a time.
+// iteration count, everything with a unit is a time. The long form
+// (animation-iteration-count) is read too — a forever loop written that way is
+// still a forever loop.
 function readAnimations(css) {
   let maxLoops = 0, maxTotal = 0, infinite = false, count = 0;
   for (const decl of css.match(/animation\s*:\s*[^;}]+/g) || []) {
-    for (const seg of decl.replace(/animation\s*:\s*/, "").split(",")) {
+    for (const seg of splitAnimations(decl.replace(/animation\s*:\s*/, ""))) {
       count++;
       const sec = t => t.endsWith("ms") ? parseFloat(t) / 1000 : parseFloat(t);
       const times = seg.match(/-?[\d.]+m?s\b/g) || [];
@@ -1071,6 +1097,30 @@ function readAnimations(css) {
       maxLoops = Math.max(maxLoops, loops);
       maxTotal = Math.max(maxTotal, delay + dur * (loops === Infinity ? 1 : loops));
     }
+  }
+  for (const m of css.matchAll(/animation-iteration-count\s*:\s*([^;}]+)/g)) {
+    count++;   // a long-form animation is still an animation
+    for (const v of m[1].split(",").map(x => x.trim())) {
+      if (v === "infinite") { infinite = true; maxLoops = Infinity; }
+      else if (/^\d+(\.\d+)?$/.test(v)) maxLoops = Math.max(maxLoops, parseFloat(v));
+    }
+  }
+  return { maxLoops, maxTotal, infinite, count };
+}
+
+// SMIL animation (<animate> and friends) — an SVG can loop forever without any
+// CSS at all.
+function readSmil(doc) {
+  let maxLoops = 0, maxTotal = 0, infinite = false, count = 0;
+  const sec = v => { v = String(v || "").trim(); if (!v || v === "indefinite") return 0;
+    return v.endsWith("ms") ? parseFloat(v) / 1000 : v.endsWith("min") ? parseFloat(v) * 60 : parseFloat(v) || 0; };
+  for (const el of doc.querySelectorAll("animate, animateTransform, animateMotion, set")) {
+    count++;
+    const rc = el.getAttribute("repeatCount"), rd = el.getAttribute("repeatDur");
+    if (rc === "indefinite" || rd === "indefinite") { infinite = true; maxLoops = Infinity; continue; }
+    const loops = rc ? parseFloat(rc) || 1 : 1;
+    maxLoops = Math.max(maxLoops, loops);
+    maxTotal = Math.max(maxTotal, sec(el.getAttribute("begin")) + (rd ? sec(rd) : sec(el.getAttribute("dur")) * loops));
   }
   return { maxLoops, maxTotal, infinite, count };
 }
@@ -1086,8 +1136,14 @@ function auditPackage(files, totalBytes, sourceLabel) {
   const meta = doc.querySelector('meta[name="ad.size"]');
   const adSize = meta ? meta.getAttribute("content") || "" : "";
   const dims = /width=(\d+),\s*height=(\d+)/.exec(adSize);
-  const css = [...doc.querySelectorAll("style")].map(s => s.textContent).join("\n");
-  const anim = readAnimations(css);
+  // Animation can live in <style> blocks, in inline style attributes, or in
+  // SMIL tags — all three are read, or a forever loop could pass unseen.
+  const css = [...doc.querySelectorAll("style")].map(s => s.textContent)
+    .concat([...doc.querySelectorAll("[style]")].map(e => e.getAttribute("style")).filter(v => /animation/i.test(v)).map(v => `x{${v}}`))
+    .join("\n");
+  const cssAnim = readAnimations(css), smil = readSmil(doc);
+  const anim = { count: cssAnim.count + smil.count, infinite: cssAnim.infinite || smil.infinite,
+                 maxLoops: Math.max(cssAnim.maxLoops, smil.maxLoops), maxTotal: Math.max(cssAnim.maxTotal, smil.maxTotal) };
 
   const assets = files.filter(f => f !== entry);
 
@@ -1120,7 +1176,7 @@ function auditPackage(files, totalBytes, sourceLabel) {
     add("info", "Package size unknown", "Only a loose HTML file was given, so its images aren't counted. Drop the .zip to check total weight.");
   }
 
-  if (!anim.count) add("info", "No CSS animation found", "Either this ad is static or it animates some other way.");
+  if (!anim.count) add("info", "No animation found", "No CSS or SMIL animation — this ad is static.");
   else if (anim.infinite) add("block", "Animation loops forever", "It never stops, which display specs don't allow. Rebuild it on the Convert tab.");
   else {
     anim.maxLoops <= SPEC.maxLoops

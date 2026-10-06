@@ -311,3 +311,45 @@ directory or a path that resolves into it.
   and shipped, so be explicit about what was actually checked versus assumed.
 - Flag risk plainly, including risk in your own work. The caveats in §6 are load-bearing.
 - When a decision is genuinely theirs (public repo naming, visibility), ask; otherwise act.
+
+---
+
+## 11. Figma plugin (`figma-plugin/`) — added 2026-10-06
+
+A private Figma plugin, **Copy Motion**, that spreads Figma Motion animation across a
+banner suite and exports HTML5 from inside Figma. Install: Figma desktop → Plugins →
+Development → Import plugin from manifest → `figma-plugin/manifest.json`. Usage is in
+`figma-plugin/README.md`. Network access is `none`; nothing leaves Figma.
+
+- **Modes:** Same content (match by copy / picture / component), Same layout (same size, by
+  layer address then position), Whole suite (both, chained from one hero), Export.
+- **Shared converter:** the code between `@converter:start` and `@converter:end` in
+  `index.html` is inlined into the plugin by `node figma-plugin/build.mjs`. `ui.html` is
+  generated — edit `figma-plugin/src/ui.html`, then rebuild. Change the checks once.
+- **Safety:** every run saves per-layer restore points (browsable, any point, survives
+  closing Figma) and a Figma version first. ⌘Z is not reliable after long runs.
+
+Hard-won facts about Figma's plugin API (Oct 2026, Motion beta) — verify before relying:
+- No animated-SVG export for plugins; the setting is silently ignored.
+- Saved animation styles report **no keyframes** (`node.animations` is `{}`); built-in
+  presets do, but times are relative to the preset start. A preset applied by a plugin
+  doesn't report keyframes in the same tick. Preset *settings* are readable — the export
+  converts those (`presetTracks` in `src/ui.html`).
+- SVG export renders the current playhead state (fade-ins at the start are omitted), so
+  export goes through a detached, animation-cleared copy.
+- A built-in preset read back from a layer has an id `applyAnimationStyle` rejects; it's
+  re-found by name (`resolveStyleId`).
+- Plugins can't animate layers inside component instances.
+- **In the client suite file used for testing, climbing `.parent` from a layer doesn't reliably reach its
+  banner.** Everything that decides containment walks *down* (`walkPage`, `mapBanner`,
+  `within`, `outermost`). Don't reintroduce parent climbs for decisions.
+
+Not yet verified against Figma playback: rotation, scale, diagonal and custom position
+presets (flagged in each export's report), and whether re-applying a preset with both its
+offset and `delay` set (kept equal) ever double-counts.
+
+Web tool changes in the same pass (`BUILD 2026-10-06a`, not yet deployed): Inspect now reads
+inline-style, long-form and SMIL loops; animation shorthands split correctly around
+`cubic-bezier(…)`; capping a long-form infinite loop writes valid CSS; the click handler
+re-checks clickTag is http(s) at click time (matching an approved client banner); the ad's
+`<title>` is escaped.

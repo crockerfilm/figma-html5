@@ -1,0 +1,1356 @@
+<style>
+  /* The list scrolls and the footer sits below it, so the last card is never
+     hidden behind the footer however tall the buttons wrap. */
+  html, body { height: 100%; }
+  body { margin: 0; font: 12px/1.45 Inter, -apple-system, system-ui, sans-serif;
+    color: var(--figma-color-text); background: var(--figma-color-bg);
+    display: flex; flex-direction: column; }
+  .wrap { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
+  h1 { font-size: 13px; margin: 0 0 4px; }
+  .muted { color: var(--figma-color-text-secondary); }
+  .card { border: 1px solid var(--figma-color-border); border-radius: 6px; padding: 10px; margin-top: 10px; }
+  .card b { font-weight: 600; }
+  .anim { margin: 6px 0 0; padding-left: 16px; }
+  .warn { color: var(--figma-color-text-warning); margin-top: 6px; }
+  .note { color: var(--figma-color-text-secondary); margin-top: 6px; font-style: italic; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; }
+  .row { display: flex; gap: 6px; align-items: flex-start; padding: 3px 0; }
+  .row a { color: var(--figma-color-text-brand); cursor: pointer; text-decoration: none; }
+  .row .where { color: var(--figma-color-text-secondary); white-space: pre-line; }
+  .foot { flex: none; padding: 10px 14px;
+    background: var(--figma-color-bg); border-top: 1px solid var(--figma-color-border); }
+  button { background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand);
+    border: 0; border-radius: 5px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .4; cursor: default; }
+  button.ghost { background: transparent; color: var(--figma-color-text); border: 1px solid var(--figma-color-border); font-weight: 500; }
+  button.danger { background: var(--figma-color-bg-danger); color: var(--figma-color-text-ondanger); border-color: transparent; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .hidden { display: none !important; }
+  .steps label { display: flex; gap: 6px; align-items: flex-start; padding: 4px 0; cursor: pointer; }
+  .total { font-weight: 600; margin-top: 8px; }
+  .err { color: var(--figma-color-text-danger); }
+  .ok { color: var(--figma-color-text-success); }
+  .status { font-size: 11px; color: var(--figma-color-text-secondary); margin-bottom: 8px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 15px; }
+  .status.busy::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px;
+    border-radius: 50%; background: var(--figma-color-text-brand); vertical-align: 1px;
+    animation: blink 1s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+  .modes { display: flex; margin: 10px 0 2px; border: 1px solid var(--figma-color-border); border-radius: 6px; overflow: hidden; }
+  .modes button { flex: 1; border-radius: 0; background: transparent; color: var(--figma-color-text-secondary); font-weight: 500; padding: 7px 8px; }
+  .modes button.on { background: var(--figma-color-bg-selected); color: var(--figma-color-text); font-weight: 600; }
+</style>
+
+<div class="wrap">
+  <h1>Copy Motion</h1>
+  <div class="modes">
+    <button data-mode="content" class="on">Same content</button>
+    <button data-mode="layout">Same layout</button>
+    <button data-mode="suite">Whole suite</button>
+    <button data-mode="export">Export</button>
+  </div>
+  <div class="muted" id="modeHelp"></div>
+  <div id="out"></div>
+  <div id="result"></div>
+</div>
+<div class="foot">
+  <div class="status" id="status">Ready</div>
+  <div class="btns">
+    <button id="go" disabled>Copy animation</button>
+    <button id="stop" class="danger hidden">Stop</button>
+    <button id="clear" class="ghost" disabled>Remove animation from others</button>
+  </div>
+  <div class="muted" style="margin-top:6px">Every run saves a restore point and a Figma version first. Use restore points, not ⌘Z — a long run lands as many undo steps.</div>
+  <div class="muted" id="restoreRow" style="margin-top:6px">
+    <span id="restoreText">Looking for restore points…</span> <a id="browse" class="hidden" style="color:var(--figma-color-text-brand);cursor:pointer">Browse restore points</a>
+  </div>
+</div>
+
+<script>
+/* @converter */
+
+/* ========================================================== motion → CSS ==== */
+// Figma won't hand a plugin its animated SVG, so the animation is rebuilt here
+// from the keyframes Figma Motion reports, the way Figma's own animated export
+// writes it: per layer, one transform animation (move, then rotate and scale
+// about the layer's centre) and one opacity animation. Where every channel
+// shares its keyframes and a curve CSS can express, keyframes are exact;
+// otherwise (springs, mixed timings) the motion is sampled, as Figma does.
+
+const SVGNS = "http://www.w3.org/2000/svg";
+// Figma's named curves, as cubic-bezier control points.
+const BEZIER = {
+  LINEAR: [0, 0, 1, 1], EASE_IN: [0.42, 0, 1, 1], EASE_OUT: [0, 0, 0.58, 1], EASE_IN_AND_OUT: [0.42, 0, 0.58, 1],
+  EASE_IN_BACK: [0.3, -0.05, 0.7, -0.5], EASE_OUT_BACK: [0.45, 1.45, 0.8, 1], EASE_IN_AND_OUT_BACK: [0.7, -0.4, 0.4, 1.4],
+  IN_QUAD: [0.11, 0, 0.5, 0], OUT_QUAD: [0.5, 1, 0.89, 1], IN_OUT_QUAD: [0.45, 0, 0.55, 1],
+  IN_CUBIC: [0.32, 0, 0.67, 0], OUT_CUBIC: [0.33, 1, 0.68, 1], IN_OUT_CUBIC: [0.65, 0, 0.35, 1],
+  IN_QUART: [0.5, 0, 0.75, 0], OUT_QUART: [0.25, 1, 0.5, 1], IN_OUT_QUART: [0.76, 0, 0.24, 1],
+  IN_EXPO: [0.7, 0, 0.84, 0], OUT_EXPO: [0.16, 1, 0.3, 1], IN_OUT_EXPO: [0.87, 0, 0.13, 1]
+};
+// Figma's spring presets (mass 1), reduced to their damping ratio — the time
+// axis is fitted to each segment, so the ratio alone sets the shape.
+const SPRING_ZETA = { GENTLE: 15 / (2 * Math.sqrt(100)), QUICK: 20 / (2 * Math.sqrt(300)),
+                      BOUNCY: 15 / (2 * Math.sqrt(600)), SLOW: 20 / (2 * Math.sqrt(80)) };
+
+function cubicBezier(x1, y1, x2, y2) {
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+  const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const X = t => ((ax * t + bx) * t + cx) * t, Y = t => ((ay * t + by) * t + cy) * t;
+  return x => {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    let lo = 0, hi = 1, t = x;
+    for (let i = 0; i < 40; i++) { if (X(t) < x) lo = t; else hi = t; t = (lo + hi) / 2; }
+    return Y(t);
+  };
+}
+
+function spring(zeta) {
+  zeta = Math.max(0.05, zeta);
+  const w = 10;
+  const x = t => {
+    if (zeta < 1) {
+      const wd = w * Math.sqrt(1 - zeta * zeta);
+      return 1 - Math.exp(-zeta * w * t) * (Math.cos(wd * t) + (zeta * w / wd) * Math.sin(wd * t));
+    }
+    if (zeta === 1) return 1 - Math.exp(-w * t) * (1 + w * t);
+    const s = Math.sqrt(zeta * zeta - 1), r1 = -w * (zeta - s), r2 = -w * (zeta + s);
+    return 1 + (r2 * Math.exp(r1 * t) - r1 * Math.exp(r2 * t)) / (r1 - r2);
+  };
+  // Fit the spring to the segment: it comes to rest (within 0.1%) at the end.
+  let T = 0.01;
+  for (let t = 0; t < 20; t += 0.005) if (Math.abs(1 - x(t)) > 0.001) T = t;
+  return p => (p >= 1 ? 1 : x(p * T));
+}
+
+// { css: a CSS timing function, or null if CSS can't express it; f: progress }
+function easing(e) {
+  if (!e || e.type === "LINEAR") return { css: "linear", f: p => p };
+  if (e.easingFunctionCubicBezier && e.type !== "HOLD") {
+    const { x1, y1, x2, y2 } = e.easingFunctionCubicBezier;
+    const r = v => +(+v).toFixed(4);
+    return { css: `cubic-bezier(${r(x1)},${r(y1)},${r(x2)},${r(y2)})`, f: cubicBezier(x1, y1, x2, y2) };
+  }
+  if (BEZIER[e.type]) { const b = BEZIER[e.type]; return { css: `cubic-bezier(${b.join(",")})`, f: cubicBezier(...b) }; }
+  if (e.type === "CUSTOM_CUBIC_BEZIER" && e.easingFunctionCubicBezier) {
+    const { x1, y1, x2, y2 } = e.easingFunctionCubicBezier;
+    return { css: `cubic-bezier(${x1},${y1},${x2},${y2})`, f: cubicBezier(x1, y1, x2, y2) };
+  }
+  if (e.type === "HOLD") return { css: "steps(1,end)", f: p => (p < 1 ? 0 : 1) };
+  if (SPRING_ZETA[e.type]) return { css: null, f: spring(SPRING_ZETA[e.type]) };
+  if (e.type === "CUSTOM_SPRING") {
+    const bounce = e.easingFunctionSpring && typeof e.easingFunctionSpring.bounce === "number" ? e.easingFunctionSpring.bounce : 0.3;
+    return { css: null, f: spring(1 - bounce) };
+  }
+  return { css: "ease", f: cubicBezier(0.25, 0.1, 0.25, 1), unknown: (e && e.type) || "unknown" };
+}
+
+const val = v => (v && v.value !== undefined ? v.value : 0);   // FLOAT → number, VECTOR → {x, y}
+const keysOf = tr => (tr.keyframes || []).slice().sort((a, b) => a.timelinePosition - b.timelinePosition);
+const mix = (a, b, e) => (typeof a === "object" ? { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e } : a + (b - a) * e);
+
+function evalTrack(keys, t) {
+  if (t <= keys[0].timelinePosition) return val(keys[0].value);
+  const last = keys[keys.length - 1];
+  if (t >= last.timelinePosition) return val(last.value);
+  let i = 0;
+  while (keys[i + 1].timelinePosition <= t) i++;
+  const a = keys[i], b = keys[i + 1];
+  const p = (t - a.timelinePosition) / (b.timelinePosition - a.timelinePosition);
+  return mix(val(a.value), val(b.value), easing(a.easing).f(p));
+}
+
+// A property's value at time t: the base value, then each track applied in
+// order — SET replaces, OFFSET adds, SCALE multiplies.
+function evalBinding(binding, t) {
+  let v = val(binding.baseValue);
+  for (const tr of binding.tracks || []) {
+    const keys = keysOf(tr);
+    if (!keys.length) continue;
+    const x = evalTrack(keys, t);
+    const op = tr.keyframeOperation || "SET";
+    const f = (a, b) => (op === "OFFSET" ? a + b : op === "SCALE" ? a * b : b);
+    v = typeof v === "object" && typeof x === "object" ? { x: f(v.x, x.x), y: f(v.y, x.y) } : f(typeof v === "object" ? 0 : v, x);
+  }
+  return v;
+}
+
+// Figma Motion presets, from their settings to keyframe tracks shaped like the
+// ones Figma reports. Settings and defaults are Figma's own, as it lists them
+// to plugins (motion.preset_name.*).
+const DIRECTION = { left: [-1, 0], right: [1, 0], top: [0, -1], bottom: [0, 1],
+                    top_left: [-1, -1], top_right: [1, -1], bottom_left: [-1, 1], bottom_right: [1, 1] };
+// Presets whose conversion hasn't been compared against Figma's own playback
+// are flagged, so a wrong direction or distance is checked rather than shipped.
+const UNVERIFIED = {
+  rotation: "rotation", scale: "scale",
+  diagonal: "a diagonal slide", customPosition: "a custom position move"
+};
+function presetTracks(pr) {
+  const P = pr.props || {}, t0 = pr.start || 0, d = pr.duration != null ? pr.duration : (P.duration != null ? P.duration : 0.5);
+  const ease = P.easing || { type: "EASE_OUT" };
+  const F = v => ({ type: "FLOAT", value: v });
+  const track = (op, from, to) => ({ keyframeOperation: op, keyframes: [
+    { timelinePosition: t0, easing: ease, value: F(from) }, { timelinePosition: t0 + d, easing: ease, value: F(to) }] });
+  const out = {}, add = (prop, base, tr) => { (out[prop] = out[prop] || { baseValue: F(base), tracks: [] }).tracks.push(tr); };
+  const num = (v, dflt) => (typeof v === "number" ? v : dflt);
+  switch (pr.preset) {
+    case "opacity": {
+      const amount = num(P.amount, 0) / 100;
+      const [a, b] = P.type === "fadeOut" ? [1, amount] : P.type === "custom" ? [num(P.startFrame, 0) / 100, num(P.endFrame, 100) / 100] : [amount, 1];
+      add("OPACITY", 1, track("SCALE", a, b));
+      return { out };
+    }
+    case "position": {
+      let sx, sy, ex, ey;
+      if (P.type === "custom") { sx = num(P.startX, 200); sy = num(P.startY, 200); ex = num(P.endX, 0); ey = num(P.endY, 0);
+        if (P.axis === "x") { sy = ey = 0; } if (P.axis === "y") { sx = ex = 0; } }
+      else {
+        const [dx, dy] = DIRECTION[P.direction] || DIRECTION.left, D = num(P.distance, 200);
+        const off = [dx * D, dy * D];
+        [sx, sy, ex, ey] = P.type === "slide_out" ? [0, 0, off[0], off[1]] : [off[0], off[1], 0, 0];
+      }
+      if (sx || ex) add("TRANSLATION_X", 0, track("OFFSET", sx, ex));
+      if (sy || ey) add("TRANSLATION_Y", 0, track("OFFSET", sy, ey));
+      const diag = P.type !== "custom" && /_/.test(P.direction || "");
+      return { out, check: P.type === "custom" ? UNVERIFIED.customPosition : diag ? UNVERIFIED.diagonal : "" };
+    }
+    case "scale": {
+      if (P.type === "custom") return { out, unsupported: "a custom scale" };
+      const A = num(P.amount, 120) / 100, [a, b] = P.type === "scaleOut" ? [1, A] : [A, 1];
+      if (P.axis !== "h") add("SCALE_X", 1, track("SCALE", a, b));
+      if (P.axis !== "w") add("SCALE_Y", 1, track("SCALE", a, b));
+      return { out, check: UNVERIFIED.scale };
+    }
+    case "rotation": {
+      // Figma measures rotation anticlockwise. Turning in clockwise starts
+      // that far anticlockwise and comes back to rest.
+      const A = num(P.amount, 180), sign = P.direction === "counterClockwise" ? -1 : 1;
+      const [a, b] = P.type === "custom" ? [num(P.start, 180), num(P.end, 0)] : P.type === "rotateOut" ? [0, -sign * A] : [sign * A, 0];
+      add("ROTATION", 0, track("OFFSET", a, b));
+      return { out, check: UNVERIFIED.rotation };
+    }
+    case "size": return { out, unsupported: "a size (width/height) animation" };
+    case "path": return { out, unsupported: "a path draw animation" };
+    case "textstagger": return { out, unsupported: "a per-letter text animation" };
+    default: return { out, unsupported: `the “${pr.name}” preset` };
+  }
+}
+
+const TRANSFORM_PROPS = ["TRANSLATION_X", "TRANSLATION_Y", "TRANSLATION_XY", "ROTATION", "SCALE_X", "SCALE_Y", "SCALE_XY"];
+const CONVERTED = new Set(TRANSFORM_PROPS.concat(["OPACITY"]));
+const PROP_LABEL = { WIDTH: "width", HEIGHT: "height", CORNER_RADIUS: "corner radius", STROKE_WEIGHT: "stroke weight",
+                     fills: "fill colour", strokes: "stroke colour", effects: "effects (blur, shadow)" };
+
+function layerMotion(anim) {
+  // Hand-placed keyframes as Figma reports them, plus every preset turned
+  // into the same kind of tracks.
+  const A = JSON.parse(JSON.stringify(anim.animations || {}));
+  const presetNotes = [], checks = [];
+  for (const pr of anim.presets || []) {
+    const { out, unsupported, check } = presetTracks(pr);
+    if (unsupported) presetNotes.push(`${unsupported}${pr.from ? ` (in “${pr.from}”)` : ""}`);
+    if (check) checks.push(check);
+    for (const k of Object.keys(out)) {
+      if (A[k] && Array.isArray(A[k].tracks)) A[k].tracks = A[k].tracks.concat(out[k].tracks);
+      else A[k] = out[k];
+    }
+  }
+  const B = k => (A[k] && (A[k].tracks || []).length ? A[k] : null);
+  const unsupported = Object.keys(A).filter(k => !CONVERTED.has(k) && A[k] && (typeof A[k] !== "object" || Object.keys(A[k]).length))
+    .map(k => PROP_LABEL[k] || k.toLowerCase().replace(/_/g, " "));
+  const base = (k, d) => (B(k) && B(k).baseValue ? val(B(k).baseValue) : d);
+  const ratio = (v, b) => (b ? v / b : v);
+  const at = t => {
+    let tx = 0, ty = 0, r = 0, sx = 1, sy = 1, o = 1;
+    if (B("TRANSLATION_X")) tx += evalBinding(B("TRANSLATION_X"), t) - base("TRANSLATION_X", 0);
+    if (B("TRANSLATION_Y")) ty += evalBinding(B("TRANSLATION_Y"), t) - base("TRANSLATION_Y", 0);
+    if (B("TRANSLATION_XY")) { const v = evalBinding(B("TRANSLATION_XY"), t), b0 = base("TRANSLATION_XY", { x: 0, y: 0 }); tx += v.x - b0.x; ty += v.y - b0.y; }
+    if (B("ROTATION")) r = evalBinding(B("ROTATION"), t) - base("ROTATION", 0);
+    if (B("SCALE_X")) sx *= ratio(evalBinding(B("SCALE_X"), t), base("SCALE_X", 1));
+    if (B("SCALE_Y")) sy *= ratio(evalBinding(B("SCALE_Y"), t), base("SCALE_Y", 1));
+    if (B("SCALE_XY")) { const v = evalBinding(B("SCALE_XY"), t), b0 = base("SCALE_XY", { x: 1, y: 1 }); sx *= ratio(v.x, b0.x); sy *= ratio(v.y, b0.y); }
+    if (B("OPACITY")) o = ratio(evalBinding(B("OPACITY"), t), base("OPACITY", anim.opacity || 1));
+    return { tx, ty, r, sx, sy, o };
+  };
+  const tracksFor = props => props.filter(B).flatMap(k => B(k).tracks.map(tr => keysOf(tr)).filter(k2 => k2.length));
+  const end = Math.max(0, ...Object.keys(A).filter(B).flatMap(k => B(k).tracks.flatMap(tr => (tr.keyframes || []).map(f => f.timelinePosition))));
+  const unknownEasing = new Set();
+  for (const k of Object.keys(A).filter(B)) for (const tr of B(k).tracks) for (const f of tr.keyframes || []) { const e = easing(f.easing); if (e.unknown) unknownEasing.add(e.unknown); }
+  for (const n of presetNotes) unsupported.push(n);
+  return { at, unsupported, checks: [...new Set(checks)], end, unknownEasing: [...unknownEasing],
+           transform: tracksFor(TRANSFORM_PROPS), opacity: tracksFor(["OPACITY"]) };
+}
+
+// Exact keyframes when every track of a channel shares its times and each
+// segment's curve is one CSS can express; null means "sample it".
+function exactFrames(tracks) {
+  if (!tracks.length) return null;
+  const times = tracks[0].map(k => k.timelinePosition);
+  for (const keys of tracks) {
+    if (keys.length !== times.length || keys.some((k, i) => Math.abs(k.timelinePosition - times[i]) > 1e-6)) return null;
+  }
+  const eases = [];
+  for (let i = 0; i < times.length; i++) {
+    const css = new Set(tracks.map(keys => easing(keys[i].easing).css));
+    if (css.size !== 1 || css.has(null)) return null;
+    eases.push([...css][0]);
+  }
+  return times.map((t, i) => ({ t, ease: eases[i] }));
+}
+
+// Sampled keyframes, thinned to the points a straight line between them can't
+// reproduce within tolerance.
+function sampledFrames(fn, start, end, tol, extraTimes) {
+  const ts = new Set(extraTimes.concat([start, end]));
+  for (let t = start; t < end; t += 1 / 60) ts.add(+t.toFixed(4));
+  const pts = [...ts].filter(t => t >= start && t <= end).sort((a, b) => a - b).map(t => ({ t, v: fn(t) }));
+  const kept = [pts[0]];
+  let i = 0;
+  while (i < pts.length - 1) {
+    let j = i + 1;
+    while (j + 1 < pts.length) {
+      const a = pts[i], b = pts[j + 1];
+      const ok = pts.slice(i + 1, j + 1).every(p => {
+        const u = (p.t - a.t) / (b.t - a.t);
+        return p.v.every((x, k) => Math.abs(x - (a.v[k] + (b.v[k] - a.v[k]) * u)) <= tol[k]);
+      });
+      if (!ok) break;
+      j++;
+    }
+    kept.push(pts[j]);
+    i = j;
+  }
+  return kept.map(p => ({ t: p.t, ease: "linear" }));
+}
+
+const n3 = x => +(+x).toFixed(3);
+const pct = (t, D) => `${+(Math.min(1, Math.max(0, t / D)) * 100).toFixed(3)}%`;
+
+function keyframesRule(name, frames, D, decl) {
+  const out = [];
+  if (frames[0].t > 0) out.push(`0%{${decl(frames[0].t)}}`);
+  frames.forEach((f, i) => {
+    const ease = i < frames.length - 1 && f.ease !== "linear" ? `;animation-timing-function:${f.ease}` : "";
+    out.push(`${pct(f.t, D)}{${decl(f.t)}${ease}}`);
+  });
+  if (frames[frames.length - 1].t < D) out.push(`100%{${decl(frames[frames.length - 1].t)}}`);
+  return `@keyframes ${name}{${out.join("")}}`;
+}
+
+// The matrix that takes coordinates in el's parent to the root SVG.
+function parentMatrix(el) {
+  let m = [1, 0, 0, 1, 0, 0];
+  const chain = [];
+  for (let p = el.parentNode; p && p.nodeType === 1 && p.nodeName.toLowerCase() !== "svg"; p = p.parentNode) chain.unshift(p);
+  for (const p of chain) { const t = p.getAttribute("transform"); if (t) m = Converter.matMul(m, Converter.parseTransform(t)); }
+  return m;
+}
+
+// Static SVG + keyframes → animated SVG. Returns the SVG and any motion that
+// couldn't be carried across, in plain words.
+function animateSvg(payload) {
+  const doc = new DOMParser().parseFromString(payload.svg, "image/svg+xml");
+  const root = doc.documentElement;
+  const notes = (payload.skipped || []).slice();
+  const layers = payload.anims.map(a => ({ a, m: layerMotion(a) }));
+  const D = Math.max(0.05, ...layers.map(l => l.m.end));
+  const css = [], anims = [];
+
+  for (const { a, m } of layers) {
+    if (m.unsupported.length) notes.push(`${a.name}: ${m.unsupported.join(", ")} animation can't be converted, so that part stays still.`);
+    if (m.unknownEasing.length) notes.push(`${a.name}: easing ${m.unknownEasing.join(", ")} isn't recognised — played as a plain ease.`);
+    if (m.checks.length) notes.push(`${a.name}: ${m.checks.join(", ")} is converted from its Figma settings but hasn't been checked against Figma's playback yet — compare the preview with Figma.`);
+    if (!m.transform.length && !m.opacity.length) continue;
+    if (a.isBanner) { notes.push(`The banner frame itself is animated; only layers inside it are converted.`); continue; }
+    const el = [...root.querySelectorAll("[id]")].find(e => e.id === a.token) ||
+               [...root.querySelectorAll("[id]")].find(e => e.id.endsWith(a.token));
+    if (!el) { notes.push(`${a.name}: not found in Figma's SVG export (it may be fully hidden or clipped), so it won't move.`); continue; }
+    el.removeAttribute("id");
+    const g = doc.createElementNS(SVGNS, "g");
+    g.setAttribute("class", a.token);
+    el.parentNode.insertBefore(g, el);
+    g.appendChild(el);
+
+    const list = [];
+    if (m.transform.length) {
+      // Centre in the wrapper's own coordinates, so rotate and scale pivot
+      // where Figma pivots them.
+      const c = a.center || { x: 0, y: 0 };
+      const inv = Converter.matInvert(parentMatrix(g));
+      const cx = inv[0] * c.x + inv[2] * c.y + inv[4], cy = inv[1] * c.x + inv[3] * c.y + inv[5];
+      const decl = t => { const s = m.at(t); return `transform:translate(${n3(s.tx)}px,${n3(s.ty)}px) translate(${n3(cx)}px,${n3(cy)}px) rotate(${n3(-s.r)}deg) scale(${n3(s.sx)},${n3(s.sy)}) translate(${n3(-cx)}px,${n3(-cy)}px)`; };
+      const frames = exactFrames(m.transform) ||
+        sampledFrames(t => { const s = m.at(t); return [s.tx, s.ty, s.r, s.sx, s.sy]; }, 0, D, [0.05, 0.05, 0.05, 0.0005, 0.0005],
+                      m.transform.flatMap(k => k.map(f => f.timelinePosition)));
+      css.push(keyframesRule(`${a.token}t`, frames, D, decl));
+      list.push(`${a.token}t`);
+    }
+    if (m.opacity.length) {
+      const decl = t => `opacity:${n3(Math.max(0, Math.min(1, m.at(t).o)))}`;
+      const frames = exactFrames(m.opacity) ||
+        sampledFrames(t => [m.at(t).o], 0, D, [0.002], m.opacity.flatMap(k => k.map(f => f.timelinePosition)));
+      css.push(keyframesRule(`${a.token}o`, frames, D, decl));
+      list.push(`${a.token}o`);
+    }
+    // One play, holding the end frame — the display spec's preferred shape.
+    css.push(`.${a.token}{transform-origin:0 0;animation:${list.map(n => `${n} ${n3(D)}s linear 0s 1 both`).join(",")}}`);
+    anims.push(a.name);
+  }
+
+  // Figma writes every layer's name as an id; keep only ids something points at.
+  const text = new XMLSerializer().serializeToString(root);
+  const used = new Set();
+  for (const mm of text.matchAll(/url\(#([^)]+)\)|href="#([^"]+)"/g)) used.add(mm[1] || mm[2]);
+  for (const e of root.querySelectorAll("[id]")) if (!used.has(e.id)) e.removeAttribute("id");
+
+  if (css.length) {
+    const style = doc.createElementNS(SVGNS, "style");
+    style.textContent = css.join("\n");
+    root.insertBefore(style, root.firstChild);
+  }
+  return { svg: new XMLSerializer().serializeToString(root), notes, duration: D, animatedLayers: anims };
+}
+
+const out = document.getElementById("out");
+const go = document.getElementById("go");
+const result = document.getElementById("result");
+let entries = [];
+const clear = document.getElementById("clear");
+let others = 0, selected = 0, armed = null;
+
+// Clearing touches the whole page, so it takes two clicks.
+function clearLabel() {
+  clearTimeout(armed); armed = null;
+  clear.classList.remove("danger");
+  // With nothing selected "everything except the selection" is the whole page,
+  // so the button asks for something to keep instead.
+  clear.disabled = !others || !selected;
+  clear.textContent = !selected ? "Select what to keep, to remove the rest"
+    : others === null ? "Counting other animation…"
+    : !others ? "No other animation on this page"
+    : `Remove animation from ${others} other layer${others === 1 ? "" : "s"}…`;
+}
+clear.addEventListener("click", () => {
+  result.innerHTML = "";
+  parent.postMessage({ pluginMessage: { type: "reviewClear" } }, "*");
+});
+
+// What the selection keeps and what goes, with its own confirm. Nothing is
+// removed until Confirm, and with no animation in the selection the person
+// has to acknowledge that everything else on the page goes.
+function renderClearReview(msg) {
+  result.innerHTML = "";
+  const card = el("div", "card");
+  card.id = "review";
+  card.appendChild(el("b", null, "Review: remove animation from everything except your selection"));
+  if (msg.note) card.appendChild(el("div", "warn", msg.note));
+
+  card.appendChild(el("div", "total", msg.keep.length
+    ? `Keeping ${msg.keep.length} animated layer${msg.keep.length === 1 ? "" : "s"} in ${msg.selection.length === 1 ? `“${msg.selection[0]}”` : `${msg.selection.length} selected layers`}:`
+    : `Keeping nothing: “${msg.selection.slice(0, 3).join("”, “")}” has no animation on it.`));
+  for (const k of msg.keep) {
+    const row = el("div", "row");
+    const a = el("a", null, "Show");
+    a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: k.id } }, "*"));
+    const txt = el("div");
+    txt.appendChild(el("div", null, k.name));
+    txt.appendChild(el("div", "where", k.lines.join("; ")));
+    txt.appendChild(el("div", "where", k.where));
+    row.appendChild(a); row.appendChild(txt);
+    card.appendChild(row);
+  }
+
+  card.appendChild(el("div", "total", `Removing animation from ${msg.removeCount.toLocaleString()} layer${msg.removeCount === 1 ? "" : "s"}:`));
+  if (msg.inherited)
+    card.appendChild(el("div", "note", `${msg.inherited.toLocaleString()} more animated layer${msg.inherited === 1 ? "" : "s"} sit inside components and get their animation from the main component. A plugin can't remove that; edit the main component instead. They're left alone.`));
+  if (msg.names.length)
+    card.appendChild(el("div", "where", msg.names.slice(0, 8).map(n => `${n.name} ×${n.count}`).join(", ") +
+      (msg.names.length > 8 ? `, and ${msg.names.length - 8} other names` : "")));
+  if (msg.groups.length) {
+    const d = el("details");
+    d.appendChild(el("summary", "muted", `Across ${msg.groups.length} top-level frame${msg.groups.length === 1 ? "" : "s"}`));
+    for (const g of msg.groups) {
+      const row = el("div", "row");
+      const a = el("a", null, "Show");
+      a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: g.id } }, "*"));
+      row.appendChild(a);
+      row.appendChild(el("div", "where", `${g.name}: ${g.count}`));
+      d.appendChild(row);
+    }
+    card.appendChild(d);
+  }
+
+  const btns = el("div", "btns");
+  btns.style.marginTop = "10px";
+  const ok = el("button", "danger", `Remove from ${msg.removeCount.toLocaleString()} layer${msg.removeCount === 1 ? "" : "s"}`);
+  const cancel = el("button", "ghost", "Cancel");
+  ok.disabled = !msg.removeCount;
+
+  if (!msg.keep.length && msg.removeCount) {
+    card.appendChild(el("div", "err", "Your selection has no animation, so this removes every animation on the page. Select the animated banner you want to keep instead, unless that's really what you mean."));
+    const lab = el("label");
+    lab.style.display = "flex"; lab.style.gap = "6px"; lab.style.marginTop = "6px";
+    const cb = el("input"); cb.type = "checkbox";
+    lab.appendChild(cb);
+    lab.appendChild(el("span", null, "I understand — remove all animation on this page"));
+    card.appendChild(lab);
+    ok.disabled = true;
+    cb.addEventListener("change", () => { ok.disabled = !cb.checked; });
+  }
+  ok.addEventListener("click", () => {
+    ok.disabled = true; cancel.disabled = true;
+    ok.textContent = "Removing…";
+    parent.postMessage({ pluginMessage: { type: "clear", signature: msg.signature } }, "*");
+  });
+  cancel.addEventListener("click", () => { result.innerHTML = ""; });
+  btns.appendChild(ok); btns.appendChild(cancel);
+  card.appendChild(btns);
+  card.appendChild(el("div", "muted", "Everything removed is backed up first as a restore point."));
+  result.appendChild(card);
+  card.scrollIntoView({ block: "start" });
+}
+
+const stop = document.getElementById("stop");
+// Answer every export the panel is still waiting for, so a build can never
+// hang on a reply that won't come.
+function releaseWaiting(reason) {
+  for (const [id, res] of waiting) { waiting.delete(id); res({ id, error: reason }); }
+}
+stop.addEventListener("click", () => {
+  uiStop = true;
+  releaseWaiting("Stopped before this banner finished.");
+  stop.disabled = true;
+  stop.textContent = "Stopping…";
+  parent.postMessage({ pluginMessage: { type: "stop" } }, "*");
+});
+
+// ---- restore points --------------------------------------------------------
+// The browser takes over the main area. Previews that arrive meanwhile are kept
+// and shown again on the way back.
+let points = [], historyInfo = { page: "", error: "" }, view = "plan", stashedPlan = null;
+const browse = document.getElementById("browse");
+const fmtWhen = at => { const t = new Date(at); return `${t.toLocaleDateString()} ${t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`; };
+
+function historyLabel() {
+  const text = document.getElementById("restoreText");
+  browse.classList.toggle("hidden", !points.length);
+  if (historyInfo.error) { text.textContent = `Couldn't read restore points: ${historyInfo.error}`; return; }
+  if (!points.length) { text.textContent = `No restore points on “${historyInfo.page}” yet. Older states are in File › Show version history.`; return; }
+  text.textContent = `${points.length} restore point${points.length === 1 ? "" : "s"}, latest ${fmtWhen(points[0].at)}.`;
+}
+browse.addEventListener("click", () => { view = "history"; renderHistory(); });
+
+function leaveHistory() {
+  view = "plan";
+  out.innerHTML = "";
+  result.innerHTML = "";
+  if (stashedPlan) { render(stashedPlan); stashedPlan = null; }
+  else parent.postMessage({ pluginMessage: { type: "scan" } }, "*");
+}
+
+function renderHistory() {
+  out.innerHTML = "";
+  result.innerHTML = "";
+  const back = el("a", null, "← Back to copying");
+  back.style.cssText = "color:var(--figma-color-text-brand);cursor:pointer;display:inline-block;margin-top:10px";
+  back.addEventListener("click", leaveHistory);
+  out.appendChild(back);
+  out.appendChild(el("div", "muted", "Every run that changed animation, newest first. Going back to before one puts every layer it — or anything after it — changed back to how it was before it ran. Going back is a restore point too, so it can be undone."));
+  if (!points.length) out.appendChild(el("div", "card muted", "No restore points on this page."));
+  for (const [i, p] of points.entries()) {
+    const card = el("div", "card");
+    const head = el("div");
+    head.appendChild(el("b", null, p.label));
+    card.appendChild(head);
+    card.appendChild(el("div", "where", `${fmtWhen(p.at)} · ${p.count.toLocaleString()} layer${p.count === 1 ? "" : "s"}` +
+      (p.versionSaved ? " · Figma version saved" : "") + (p.legacy ? " · from an earlier version of this plugin" : "")));
+    if (i > 0) card.appendChild(el("div", "where", `${i} newer restore point${i === 1 ? "" : "s"} above — going back here undoes those too, for the layers they share.`));
+    const btns = el("div", "btns");
+    btns.style.marginTop = "8px";
+    const go2 = el("button", "ghost", "Go back to before this…");
+    go2.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "reviewGoBack", id: p.id } }, "*"));
+    const show = el("button", "ghost", "Show layers");
+    show.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "showPoint", id: p.id } }, "*"));
+    const del = el("button", "ghost", "Delete");
+    let armed = null;
+    del.addEventListener("click", () => {
+      if (!armed) {
+        del.classList.add("danger");
+        del.textContent = "Click again to delete this restore point";
+        armed = setTimeout(() => { armed = null; del.classList.remove("danger"); del.textContent = "Delete"; }, 4000);
+        return;
+      }
+      clearTimeout(armed);
+      parent.postMessage({ pluginMessage: { type: "deletePoint", id: p.id } }, "*");
+    });
+    btns.appendChild(go2); btns.appendChild(show); btns.appendChild(del);
+    card.appendChild(btns);
+    out.appendChild(card);
+  }
+}
+
+function renderGoBackReview(msg) {
+  result.innerHTML = "";
+  const card = el("div", "card");
+  card.id = "review";
+  card.appendChild(el("b", null, `Review: go back to before “${msg.label}”`));
+  if (msg.note) card.appendChild(el("div", "warn", msg.note));
+  card.appendChild(el("div", "total", `Puts ${msg.layers.toLocaleString()} layer${msg.layers === 1 ? "" : "s"} back to how they were at ${fmtWhen(msg.at)}, just before that run.`));
+  if (msg.names.length) card.appendChild(el("div", "where", msg.names.map(n => `${n.name} ×${n.count}`).join(", ")));
+  if (msg.later.length) card.appendChild(el("div", "warn", `This also undoes ${msg.later.length} newer restore point${msg.later.length === 1 ? "" : "s"} for the layers they share: ${msg.later.slice(0, 4).join("; ")}${msg.later.length > 4 ? "…" : ""}`));
+  card.appendChild(el("div", "muted", "Animation you added by hand since then, on those same layers, is replaced too. Going back is saved as a restore point, so it can be undone."));
+  const btns = el("div", "btns");
+  btns.style.marginTop = "10px";
+  const ok = el("button", "danger", `Go back — ${msg.layers.toLocaleString()} layer${msg.layers === 1 ? "" : "s"}`);
+  const cancel = el("button", "ghost", "Cancel");
+  ok.disabled = !msg.layers;
+  ok.addEventListener("click", () => {
+    ok.disabled = true; cancel.disabled = true; ok.textContent = "Restoring…";
+    parent.postMessage({ pluginMessage: { type: "goBack", id: msg.id, expected: msg.layers } }, "*");
+  });
+  cancel.addEventListener("click", () => { result.innerHTML = ""; });
+  btns.appendChild(ok); btns.appendChild(cancel);
+  card.appendChild(btns);
+  result.appendChild(card);
+  card.scrollIntoView({ block: "start" });
+}
+
+
+// Layer names and copy come from the file, so build with textContent only.
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+const HELP = {
+  content: "Select the banner you animated (or just its animated layers). Every layer on this page that shows the same copy, image or component gets the same animation, at any size.",
+  layout: "Select the banner(s) you animated. Every other banner of the same size gets the same animation in the same places, whatever copy, colour or image it has. Select one animated banner per size to cover a whole suite.",
+  export: "Select the banners to export as HTML5, or a Version frame or section that holds them. Each is checked against the same spec as the web tool; only banners that pass go in the download.",
+  suite: "Select the one banner you animated. The plugin plans how to copy its animation to every banner on this page, shows you the plan, and changes nothing until you click Copy."
+};
+document.querySelectorAll(".modes button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".modes button").forEach(x => x.classList.toggle("on", x === b));
+  document.getElementById("modeHelp").textContent = HELP[b.dataset.mode];
+  out.innerHTML = ""; result.innerHTML = "";
+  parent.postMessage({ pluginMessage: { type: "mode", mode: b.dataset.mode } }, "*");
+}));
+document.getElementById("modeHelp").textContent = HELP.content;
+
+// A checkbox stands for one layer in content mode and for all of a banner's
+// layers in layout mode, so count what each one carries.
+let goArmed = null;
+const BIG = 150;   // runs larger than this take a second click
+function count() {
+  clearTimeout(goArmed); goArmed = null;
+  if (currentMode === "export") return exportButton();
+  go.classList.remove("danger");
+  let n = 0;
+  out.querySelectorAll("input.t:checked").forEach(c => { n += Number(c.dataset.n || 1); });
+  go.disabled = !n;
+  go.textContent = n ? `Copy animation to ${n} layer${n === 1 ? "" : "s"}` : "Copy animation";
+}
+
+function render(msg) {
+  out.innerHTML = "";
+  if (msg.error) { out.appendChild(el("div", "card muted", msg.error)); entries = []; count(); return; }
+  if (msg.mode === "layout") return renderLayout(msg);
+  if (msg.mode === "suite") return renderSuite(msg);
+  if (msg.mode === "export") return renderExport(msg);
+  entries = msg.entries;
+
+  for (const e of entries) {
+    const card = el("div", "card");
+    const head = el("div");
+    head.appendChild(el("b", null, e.name));
+    head.appendChild(el("span", "muted", " — matched by " + e.label));
+    card.appendChild(head);
+
+    const ul = el("ul", "anim");
+    for (const line of e.lines) ul.appendChild(el("li", null, line));
+    card.appendChild(ul);
+    if (e.kind === "name")
+      card.appendChild(el("div", "warn", "No copy, image or component to match on, so this falls back to the layer name. Check the list."));
+    if (e.warn) card.appendChild(el("div", "warn", e.warn));
+    if (e.note) { card.appendChild(el("div", "note", e.note)); out.appendChild(card); continue; }
+    if (e.blocked) {
+      card.appendChild(el("div", "err", e.blocked));
+      card.appendChild(el("div", "muted", `${e.matches.length} matching layer${e.matches.length === 1 ? "" : "s"} will be skipped.`));
+      out.appendChild(card);
+      continue;
+    }
+
+    const shown = e.matches.filter(m => !m.hidden).length;
+    const hidden = e.matches.length - shown;
+    const det = el("details");
+    const sum = el("summary");
+    const all = el("input"); all.type = "checkbox"; all.checked = shown > 0;
+    all.addEventListener("click", ev => ev.stopPropagation());
+    all.addEventListener("change", () => {
+      det.querySelectorAll("input.t").forEach(c => { c.checked = all.checked; });
+      count();
+    });
+    sum.appendChild(all);
+    sum.appendChild(document.createTextNode(` ${e.matches.length} matching layer${e.matches.length === 1 ? "" : "s"}` +
+      (hidden ? ` (${hidden} hidden, left unticked)` : "")));
+    det.appendChild(sum);
+
+    for (const m of e.matches) {
+      const row = el("div", "row");
+      const cb = el("input", "t"); cb.type = "checkbox"; cb.checked = !m.hidden;
+      cb.dataset.src = e.id; cb.dataset.id = m.id;
+      cb.addEventListener("change", count);
+      const a = el("a", null, m.name);
+      a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: m.id } }, "*"));
+      const txt = el("div");
+      txt.appendChild(a);
+      txt.appendChild(el("div", "where", m.where + (m.hidden ? " · hidden" : "")));
+      if (m.via) txt.appendChild(el("div", "where", m.via));
+      row.appendChild(cb); row.appendChild(txt);
+      det.appendChild(row);
+    }
+    if (e.locked.length) {
+      const lk = el("details");
+      lk.appendChild(el("summary", "warn", `${e.locked.length} match${e.locked.length === 1 ? "" : "es"} inside components can't be copied — Figma doesn't let plugins animate part of a component. Animate the component itself.`));
+      for (const w of e.locked) lk.appendChild(el("div", "where", w));
+      card.appendChild(lk);
+    }
+    if (!e.matches.length) card.appendChild(el("div", "muted", "No other layer on this page can take this animation."));
+    else card.appendChild(det);
+    out.appendChild(card);
+  }
+  count();
+}
+
+function renderSuite(msg) {
+  const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
+  const size = msg.hero.size;
+  const total = msg.steps.reduce((n, s) => n + s.layers, 0);
+  const copyIssues = msg.copyIssues || [];
+  const attention = msg.notReached.length + msg.partial.length + msg.layoutBanners.length + copyIssues.length;
+
+  // 1. The outcome, in one line.
+  const sum = el("div", "card");
+  sum.appendChild(el("div", "total", `Animates ${msg.reachedTotal} of ${plural(msg.bannerTotal, "banner")}`));
+  sum.appendChild(el("div", "muted", `${plural(total, "layer")} in total. Nothing changes until you click Copy.` +
+    (attention ? ` ${plural(attention, "banner")} need a look — see below.` : "")));
+  for (const b of msg.blocked) sum.appendChild(el("div", "err", b));
+  out.appendChild(sum);
+
+  // 2. What's being copied.
+  const hero = el("div", "card");
+  hero.appendChild(el("b", null, `Copying from ${msg.hero.name}`));
+  const ul = el("ul", "anim");
+  for (const s of msg.hero.sources) ul.appendChild(el("li", null, `${s.name}: ${s.lines.join("; ")}`));
+  hero.appendChild(ul);
+  out.appendChild(hero);
+
+  // 3. The three steps, in plain words. Each can be switched off.
+  const STEP = {
+    1: ["Same message, every size",
+        "Every banner showing the same headline, CTA, logo or picture as yours gets the same animation, at any size."],
+    2: [`Same size, every message`,
+        `The other ${size} banners get it in the same spots, whatever their headline says.`],
+    3: ["Every message, every size",
+        `Each of those ${size} banners then passes its animation on to the other sizes of its own message.`]
+  };
+  const steps = el("div", "card steps");
+  for (const s of msg.steps) {
+    const lab = el("label");
+    const cb = el("input", "t"); cb.type = "checkbox";
+    cb.checked = s.layers > 0; cb.disabled = !s.layers;
+    cb.dataset.step = s.step; cb.dataset.n = s.layers;
+    cb.addEventListener("change", count);
+    const txt = el("div");
+    txt.appendChild(el("b", null, `${s.step}. ${STEP[s.step][0]}`));
+    txt.appendChild(el("div", "where", STEP[s.step][1]));
+    txt.appendChild(el("div", "where", s.layers ? `${plural(s.layers, "layer")} in ${plural(s.banners, "banner")}` : "Nothing to do in this step."));
+    lab.appendChild(cb); lab.appendChild(txt);
+    steps.appendChild(lab);
+  }
+  out.appendChild(steps);
+
+  // 4. Anything a person should check, each with why and what to do.
+  if (attention) {
+    const need = el("div", "card");
+    need.appendChild(el("b", null, "Needs a look"));
+    if (copyIssues.length) {
+      const d = el("details");
+      d.open = true;
+      d.appendChild(el("summary", "err", `Wording differs between banners — ${copyIssues.length} message${copyIssues.length === 1 ? "" : "s"}`));
+      d.appendChild(el("div", "muted", "The same message is worded slightly differently on different banners — usually a typo, or a copy edit that missed some sizes. Fix it in Figma so they match. Until then, headlines won't animate on banners whose wording differs from the banner it's copied from."));
+      for (const issue of copyIssues) {
+        const box = el("div");
+        box.style.cssText = "border-left:2px solid var(--figma-color-border-danger, #e5484d);padding-left:8px;margin-top:8px";
+        for (const v of issue) {
+          const row = el("div", "row");
+          const a = el("a", null, "Select");
+          a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "select", ids: v.ids } }, "*"));
+          const txt = el("div");
+          txt.appendChild(el("div", null, `“${v.copy}”`));
+          txt.appendChild(el("div", "where", `${plural(v.count, "banner")} · ${v.sizes.join(", ")}`));
+          row.appendChild(a); row.appendChild(txt);
+          box.appendChild(row);
+        }
+        d.appendChild(box);
+      }
+      need.appendChild(d);
+    }
+    const list = (title, explain, items, describeItem) => {
+      if (!items.length) return;
+      const d = el("details");
+      d.appendChild(el("summary", "warn", title));
+      d.appendChild(el("div", "muted", explain));
+      for (const it of items) {
+        const row = el("div", "row");
+        const a = el("a", null, "Show");
+        a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: it.id } }, "*"));
+        const txt = el("div");
+        txt.appendChild(el("div", "where", it.where));
+        const extra = describeItem && describeItem(it);
+        if (extra) { const ex = el("div", null, extra); ex.style.whiteSpace = "pre-line"; txt.appendChild(ex); }
+        row.appendChild(a); row.appendChild(txt);
+        d.appendChild(row);
+      }
+      need.appendChild(d);
+    };
+    list(`${plural(msg.notReached.length, "banner")} won't be animated`,
+      "Nothing in these matched your banner. Each one says why, layer by layer. Fix it in Figma, or animate one by hand.",
+      msg.notReached, it => (it.why || []).join("\n"));
+    list(`${plural(msg.partial.length, "banner")}: the headline won't move`,
+      `Headlines are matched by their exact wording. These don't match any animated banner word for word, so their CTA and logo animate but the headline stays still. Make the wording match, or animate one banner of that size and use Same layout.`,
+      msg.partial, it => it.texts.map(t => t.near
+        ? `Says: “${t.copy}”\nClosest animated headline: “${t.near}”`
+        : `Says: “${t.copy}” — no animated headline is close`).join("\n"));
+    list(`${plural(msg.layoutBanners.length, `${size} banner`)}: some layers not found`,
+      `These are laid out differently from your banner, so some of its animated layers had no counterpart.`,
+      msg.layoutBanners, it => [it.missing.length ? `Not found: ${it.missing.join(", ")}` : "",
+                                it.locked.length ? `Inside a component, which a plugin can't animate: ${it.locked.join(", ")}` : ""].filter(Boolean).join("\n"));
+    out.appendChild(need);
+  }
+
+  // 5. Small print, and how matching works, folded away.
+  const small = [];
+  if (msg.hiddenSkipped) small.push(`${plural(msg.hiddenSkipped, "hidden layer")} left alone.`);
+  if (msg.lockedCount) small.push(`${plural(msg.lockedCount, "layer")} inside components left alone — a plugin can't animate part of a component.`);
+  if (msg.conflicts) small.push(`${plural(msg.conflicts, "layer")} matched two different animations; your banner's own won.`);
+  const how = el("details");
+  how.appendChild(el("summary", "muted", "How this works"));
+  how.appendChild(el("div", "where",
+    "Text is matched by exact wording, buttons and logos by component, images by the picture itself, and anything else by layer name. " +
+    `Step 2 instead matches by position: the same layer in the same place in each ${size} banner. ` +
+    "Every banner ends up with animation copied from one of your banner's layers, so it moves the way yours does. " +
+    "A restore point and a Figma version are saved before anything changes."));
+  const foot = el("div", "card");
+  for (const line of small) foot.appendChild(el("div", "muted", line));
+  foot.appendChild(how);
+  out.appendChild(foot);
+  count();
+}
+
+function renderLayout(msg) {
+  for (const h of msg.heroes) {
+    const card = el("div", "card");
+    const head = el("div");
+    head.appendChild(el("b", null, h.name));
+    head.appendChild(el("span", "muted", ` — ${h.size}, ${h.sources.length} animated layer${h.sources.length === 1 ? "" : "s"}`));
+    card.appendChild(head);
+    const ul = el("ul", "anim");
+    for (const s of h.sources) ul.appendChild(el("li", null, `${s.name}: ${s.lines.join("; ")}`));
+    card.appendChild(ul);
+    for (const b of h.blocked) card.appendChild(el("div", "err", b));
+    if (!h.sources.length) {
+      card.appendChild(el("div", "muted", "Nothing in this banner has animation that can be copied."));
+      out.appendChild(card);
+      continue;
+    }
+    if (!h.banners.length) {
+      card.appendChild(el("div", "muted", `No other ${h.size} banner on this page.`));
+      out.appendChild(card);
+      continue;
+    }
+
+    const det = el("details");
+    det.open = true;
+    const sum = el("summary");
+    const all = el("input"); all.type = "checkbox"; all.checked = true;
+    all.addEventListener("click", ev => ev.stopPropagation());
+    all.addEventListener("change", () => {
+      det.querySelectorAll("input.t").forEach(c => { if (!c.disabled) c.checked = all.checked; });
+      count();
+    });
+    sum.appendChild(all);
+    const complete = h.banners.filter(b => !b.missing.length && !b.locked.length).length;
+    sum.appendChild(document.createTextNode(` ${h.banners.length} other ${h.size} banner${h.banners.length === 1 ? "" : "s"}` +
+      (complete < h.banners.length ? ` · ${h.banners.length - complete} only partly matched` : " · all fully matched")));
+    det.appendChild(sum);
+
+    for (const b of h.banners) {
+      const row = el("div", "row");
+      const cb = el("input", "t"); cb.type = "checkbox";
+      cb.disabled = !b.pairs.length;
+      cb.checked = b.pairs.length > 0 && !b.hidden;
+      cb.dataset.pairs = JSON.stringify(b.pairs.map(p => [p.src, p.tgt]));
+      cb.dataset.n = b.pairs.length;
+      cb.addEventListener("change", count);
+      const txt = el("div");
+      const a = el("a", null, b.name);
+      a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: b.id } }, "*"));
+      txt.appendChild(a);
+      txt.appendChild(el("div", "where", b.where + (b.hidden ? " · hidden" : "")));
+      const n = h.sources.length;
+      txt.appendChild(el("div", b.missing.length || b.locked.length ? "warn" : "where",
+        `${b.pairs.length}/${n} layers found` +
+        (b.missing.length ? ` — no match for ${b.missing.join(", ")}` : "") +
+        (b.locked.length ? ` — inside a component, can't animate: ${b.locked.join(", ")}` : "")));
+      const guessed = b.pairs.filter(p => p.how !== "same layer");
+      if (guessed.length)
+        txt.appendChild(el("div", "where", guessed.map(p => `${p.srcName} → ${p.how}`).join("; ")));
+      row.appendChild(cb); row.appendChild(txt);
+      det.appendChild(row);
+    }
+    card.appendChild(det);
+    out.appendChild(card);
+  }
+  count();
+}
+
+/* ============================================================ export mode ==== */
+// Build each banner one at a time (Figma exports, this panel animates, checks
+// and packages it with the web tool's own converter), then download them all
+// as one zip. Blocked banners are left out of the zip, as on the web tool.
+let exportPlan = [], built = new Map(), building = false, uiStop = false, previewId = null;
+const waiting = new Map();   // banner id → resolver for its "exported" message
+
+const slug = s => String(s).replace(/×/g, "x").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "banner";
+
+function exportButton() {
+  const picked = [...out.querySelectorAll("input.xb:checked")];
+  const ready = [...built.values()].filter(b => b.ok).length;
+  go.classList.remove("danger");
+  if (building) { go.disabled = true; return; }
+  // Once every ticked banner has been built, the button downloads whatever
+  // passed — one failure mustn't hold back the rest. Ticking another unbuilt
+  // banner switches it back to building.
+  if (picked.length && picked.every(c => built.has(c.dataset.id))) {
+    go.disabled = !ready;
+    go.textContent = ready ? `Download ${ready} banner${ready === 1 ? "" : "s"} (.zip)` : "Nothing passed — see why below";
+    go.dataset.action = "download";
+  } else {
+    const todo = picked.filter(c => !built.has(c.dataset.id)).length;
+    go.disabled = !picked.length;
+    go.textContent = picked.length ? `Build and check ${todo || picked.length} banner${(todo || picked.length) === 1 ? "" : "s"}` : "Build and check";
+    go.dataset.action = "build";
+  }
+}
+
+function renderExport(msg) {
+  // A new selection is a new export: earlier builds may be out of date.
+  exportPlan = msg.banners;
+  built = new Map();
+  previewId = null;
+  out.innerHTML = "";
+  const card = el("div", "card");
+  card.appendChild(el("b", null, `${exportPlan.length} banner${exportPlan.length === 1 ? "" : "s"} to export`));
+  card.appendChild(el("div", "muted", "Each is exported from Figma, its Motion animation rebuilt as CSS, then checked and packaged exactly as the web tool does. Click a banner once built to preview it."));
+  const list = el("div");
+  list.id = "xlist";
+  for (const b of exportPlan) {
+    const row = el("div", "row");
+    const cb = el("input", "xb"); cb.type = "checkbox"; cb.checked = b.animated > 0; cb.dataset.id = b.id;
+    cb.addEventListener("change", exportButton);
+    const txt = el("div");
+    const a = el("a", null, `${b.name}`);
+    a.addEventListener("click", () => showBanner(b.id));
+    txt.appendChild(a);
+    txt.appendChild(el("div", "where", `${b.where} · ${b.w}×${b.h} · ${b.animated} animated layer${b.animated === 1 ? "" : "s"}`));
+    const st = el("div", "where", built.has(b.id) ? statusText(built.get(b.id)) : "Not built yet");
+    st.id = `xs-${b.id}`;
+    txt.appendChild(st);
+    row.appendChild(cb); row.appendChild(txt);
+    list.appendChild(row);
+  }
+  card.appendChild(list);
+  out.appendChild(card);
+  const pv = el("div", "card hidden");
+  pv.id = "xpreview";
+  out.appendChild(pv);
+  exportButton();
+}
+
+function statusText(b) {
+  if (b.error) return `✗ ${b.error}`;
+  const blocks = b.out.results.filter(r => r.status === "block").length;
+  const warns = b.out.results.filter(r => r.status === "warn").length;   // motion notes are among these
+  const first = b.out.results.find(r => r.status === "block");
+  return blocks ? `✗ Not to spec — ${first.rule.title.toLowerCase()}: ${first.detail}` + (blocks > 1 ? ` (+${blocks - 1} more)` : "")
+    : `✓ Ready — ${Converter.kb(b.out.chosen.zipBytes)}, ${n3(b.duration)}s` + (warns ? ` · ${warns} note${warns === 1 ? "" : "s"}` : "");
+}
+
+function setStatus(id, text) { const s = document.getElementById(`xs-${id}`); if (s) s.textContent = text; }
+
+async function buildOne(b) {
+  setStatus(b.id, "Exporting from Figma…");
+  const payload = await new Promise(res => { waiting.set(b.id, res); parent.postMessage({ pluginMessage: { type: "exportBanner", id: b.id } }, "*"); });
+  if (payload.error) return { picked: true, ok: false, error: payload.error, payload: { name: b.name, where: b.where, width: b.w, height: b.h } };
+  setStatus(b.id, "Rebuilding the animation…");
+  await new Promise(r => setTimeout(r, 0));
+  const anim = animateSvg(payload);
+  setStatus(b.id, "Checking against spec and packaging…");
+  // Frames are usually named by their size, which the file name adds anyway,
+  // and version frames often share a name — so the headline's first words go
+  // in too, to say which message each file carries.
+  const named = /^\d+x\d+$/.test(slug(payload.name)) || /^frame-?\d*$/i.test(slug(payload.name)) ? "" : `_${slug(payload.name)}`;
+  const words = slug((payload.headline || "").split(" ").slice(0, 4).join(" "));
+  const fileName = `${slug(payload.parent)}${named}${words ? "_" + words : ""}`;
+  const outp = await Converter.run({ name: `${fileName}.svg`, text: async () => anim.svg });
+  // Motion that couldn't be carried across goes in the report as warnings.
+  for (const note of anim.notes) outp.results.push({ rule: { id: "motion", title: "Motion" }, status: "warn", detail: note });
+  // If none of the animated layers converted, the web tool's "static export"
+  // advice would mislead — say what actually happened instead.
+  if (!anim.animatedLayers.length) {
+    const r = outp.results.find(x => x.rule.id === "animation");
+    if (r) Object.assign(r, { status: "block",
+      detail: `Figma reported ${payload.anims.length} animated layer${payload.anims.length === 1 ? "" : "s"}, but none of their animation could be read and converted.`,
+      todo: "This is a plugin problem, not your file. Open Technical details below and send its contents to whoever maintains the plugin." });
+  }
+  const ok = !outp.blocked && !outp.results.some(r => r.status === "block");
+  // What the plugin received, for diagnosing a conversion that went wrong —
+  // the keyframes and what came of them, without the (huge) SVG.
+  const details = JSON.stringify({ banner: `${payload.where} › ${payload.name}`, converted: anim.animatedLayers, notes: anim.notes,
+    layers: payload.anims.map(a => ({ name: a.name, type: a.type, token: a.token, center: a.center, opacity: a.opacity,
+      foundInSvg: payload.svg.includes(`"${a.token}"`) || new RegExp(`id="[^"]*${a.token}"`).test(payload.svg),
+      presets: a.presets, trace: a.trace, animations: a.animations })),
+    presetsOfferedToPlugins: payload.offered,
+    svgKB: Math.round(payload.svg.length / 1024) }, null, 1);
+  return { picked: true, ok, out: outp, notes: anim.notes, duration: anim.duration, fileName, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
+}
+
+async function buildAll() {
+  const ids = [...out.querySelectorAll("input.xb:checked")].map(c => c.dataset.id).filter(id => !built.has(id));
+  building = true; uiStop = false;
+  stop.classList.remove("hidden"); stop.disabled = false; stop.textContent = "Stop";
+  clear.classList.add("hidden");
+  document.querySelectorAll(".modes button").forEach(b => { b.disabled = true; });
+  exportButton();
+  try {
+  for (const [i, id] of ids.entries()) {
+    if (uiStop) break;
+    const b = exportPlan.find(x => x.id === id);
+    go.textContent = `Building ${i + 1} of ${ids.length}…`;
+    let r;
+    try { r = await buildOne(b); } catch (e) { r = { picked: true, ok: false, error: String((e && e.message) || e), payload: { name: b.name, where: b.where, width: b.w, height: b.h } }; }
+    built.set(id, r);
+    setStatus(id, statusText(r));
+    const cb = out.querySelector(`input.xb[data-id="${id}"]`);
+    if (cb) cb.dataset.built = "1";
+    if (previewId === null && r.ok) showBanner(id);
+  }
+  // Nothing passed: open the first failure so the reason is on screen.
+  if (previewId === null) { const failed = ids.find(id => built.has(id)); if (failed) showBanner(failed); }
+  } catch (e) {
+    result.innerHTML = "";
+    result.appendChild(el("div", "card err", `Building stopped: ${(e && e.message) || e}`));
+  }
+  building = false;
+  stop.classList.add("hidden");
+  document.querySelectorAll(".modes button").forEach(b => { b.disabled = false; });
+  exportButton();
+}
+
+// The preview plays the real packaged output, images inlined, in a sandboxed
+// frame with a scrubber — the same view as the web tool's Inspect tab.
+const SEEK = `<script>window.addEventListener("message",function(e){var d=e.data||{},a=document.getAnimations();
+if(d.cmd==="seek"){a.forEach(function(x){x.pause();x.currentTime=d.t;});}
+else if(d.cmd==="play"){a.forEach(function(x){x.currentTime=0;x.play();});}});<\/script>`;
+
+function previewHtml(o) {
+  let html = o.html;
+  for (const a of o.assets) {
+    let bin = "";
+    for (let i = 0; i < a.data.length; i += 0x8000) bin += String.fromCharCode.apply(null, a.data.subarray(i, i + 0x8000));
+    html = html.split(a.name).join(`data:${a.type};base64,${btoa(bin)}`);
+  }
+  return html.replace(/<\/body>/i, SEEK + "</body>");
+}
+
+function showBanner(id) {
+  const b = built.get(id);
+  const pv = document.getElementById("xpreview");
+  if (!pv) return;
+  pv.classList.remove("hidden");
+  pv.innerHTML = "";
+  if (!b) { pv.appendChild(el("div", "muted", "Build this banner first to preview it.")); return; }
+  previewId = id;
+  pv.appendChild(el("b", null, `${b.payload ? b.payload.where + " › " + b.payload.name : "Banner"}`));
+  if (b.error) { pv.appendChild(el("div", "err", b.error)); return; }
+  pv.appendChild(el("div", b.ok ? "ok" : "err", statusText(b)));
+
+  // A banner that failed an early check was never packaged, so there's
+  // nothing to play — show why instead.
+  if (!b.out.chosen) {
+    pv.appendChild(el("div", "muted", "This banner stopped at an early check, so there's no preview. The reason is below."));
+  } else {
+  const W = b.out.ctx.width, H = b.out.ctx.height;
+  const avail = Math.min(380, out.clientWidth - 40);
+  const scale = Math.min(1, avail / W, 420 / H);
+  const stage = el("div");
+  stage.style.cssText = `position:relative;width:${Math.round(W * scale)}px;height:${Math.round(H * scale)}px;margin-top:8px;overflow:hidden;border:1px solid var(--figma-color-border);background:#000`;
+  const f = document.createElement("iframe");
+  f.setAttribute("sandbox", "allow-scripts");
+  f.width = W; f.height = H;
+  f.style.cssText = `border:0;position:absolute;left:0;top:0;transform-origin:0 0;transform:scale(${scale})`;
+  f.srcdoc = previewHtml(b.out);
+  stage.appendChild(f);
+  pv.appendChild(stage);
+
+  const D = b.duration * 1000;
+  const row = el("div", "btns"); row.style.marginTop = "8px";
+  const play = el("button", "ghost", "Play");
+  const end = el("button", "ghost", "End frame");
+  const time = el("span", "muted", `${n3(b.duration)}s`);
+  const scrub = el("input"); scrub.type = "range"; scrub.min = 0; scrub.max = 1000; scrub.value = 0; scrub.style.width = "100%";
+  const seek = ms => { f.contentWindow.postMessage({ cmd: "seek", t: ms }, "*"); time.textContent = `${(ms / 1000).toFixed(2)}s / ${n3(b.duration)}s`; };
+  play.addEventListener("click", () => f.contentWindow.postMessage({ cmd: "play" }, "*"));
+  end.addEventListener("click", () => { scrub.value = 1000; seek(D); });
+  scrub.addEventListener("input", () => seek(D * scrub.value / 1000));
+  row.appendChild(play); row.appendChild(end); row.appendChild(time);
+  pv.appendChild(row);
+  pv.appendChild(scrub);
+  pv.appendChild(el("div", "muted", "Check the end frame shows the call to action — the ad stops there."));
+  }
+
+  const checks = el("details");
+  checks.appendChild(el("summary", "muted", "Spec checks"));
+  for (const r of b.out.results) {
+    const line = el("div", "row");
+    line.appendChild(el("span", r.status === "block" ? "err" : r.status === "warn" ? "warn" : "muted", r.status.toUpperCase()));
+    const t = el("div");
+    t.appendChild(el("div", null, r.rule.title));
+    t.appendChild(el("div", "where", r.detail + (r.todo ? ` — Change in Figma: ${r.todo}` : "")));
+    line.appendChild(t);
+    checks.appendChild(line);
+  }
+  if (b.out.results.some(r => r.status !== "pass")) checks.open = true;
+  pv.appendChild(checks);
+  if (b.details) {
+    const tech = el("details");
+    tech.appendChild(el("summary", "muted", "Technical details (for the plugin maintainer)"));
+    const ta = el("textarea");
+    ta.readOnly = true;
+    ta.value = b.details;
+    ta.style.cssText = "width:100%;height:160px;font:11px ui-monospace,monospace;background:var(--figma-color-bg-secondary);color:var(--figma-color-text);border:1px solid var(--figma-color-border)";
+    ta.addEventListener("focus", () => ta.select());
+    tech.appendChild(ta);
+    const copyBtn = el("button", "ghost", "Copy technical details");
+    copyBtn.addEventListener("click", () => {
+      ta.focus(); ta.select();
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { /* fall back to ⌘C */ }
+      copyBtn.textContent = ok ? "Copied — paste it to the plugin maintainer" : "Selected — press ⌘C";
+    });
+    tech.appendChild(copyBtn);
+    pv.appendChild(tech);
+  }
+  pv.scrollIntoView({ block: "nearest" });
+}
+
+async function downloadAll() {
+  const ticked = new Set([...out.querySelectorAll("input.xb:checked")].map(c => c.dataset.id));
+  const entries = [...built.entries()].filter(([id]) => ticked.has(id)).map(([, b]) => b);
+  const files = [], used = new Set(), csv = [["file", "banner", "where", "headline", "size", "status", "kb", "seconds", "notes"]];
+  for (const b of entries) {
+    const name = b.payload ? b.payload.name : "?";
+    const headline = b.payload ? b.payload.headline || "" : "";
+    if (!b.ok) { csv.push(["", name, b.payload ? b.payload.where : "", headline, b.payload ? `${b.payload.width}x${b.payload.height}` : "", b.error ? "error" : "not to spec", "", "", b.error || b.out.results.filter(r => r.status === "block").map(r => r.detail).join(" | ")]); continue; }
+    const inner = await Converter.makeZip(b.out.chosen.files);
+    let fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}`, k = 2;
+    while (used.has(fn)) fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}-${k++}`;
+    used.add(fn);
+    files.push({ name: `${fn}.zip`, data: new Uint8Array(await inner.arrayBuffer()) });
+    csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), n3(b.duration), b.notes.join(" | ")]);
+  }
+  const esc = v => `"${String(v).replace(/"/g, '""')}"`;
+  files.push({ name: "report.csv", data: new TextEncoder().encode(csv.map(r => r.map(esc).join(",")).join("\n")) });
+  const zip = await Converter.makeZip(files);
+  const fileName = `html5-banners-${new Date().toISOString().slice(0, 10)}.zip`;
+  const url = URL.createObjectURL(zip);
+  // Figma's plugin frame can block a download started from code after a
+  // wait, so the file is also offered as a link to click — a direct click on
+  // a download link is allowed.
+  const auto = document.createElement("a");
+  auto.href = url; auto.download = fileName;
+  document.body.appendChild(auto);
+  try { auto.click(); } catch (e) { /* the link below still works */ }
+  auto.remove();
+  result.innerHTML = "";
+  const card = el("div", "card");
+  const left = entries.length - (files.length - 1);
+  card.appendChild(el("div", "ok", `${files.length - 1} banner${files.length - 1 === 1 ? "" : "s"} packaged, with a report.csv.`));
+  const save = el("a", null, `Save ${fileName} (${Converter.fmt(zip.size)})`);
+  save.href = url; save.download = fileName;
+  save.style.cssText = "display:inline-block;margin-top:6px;font-weight:600;color:var(--figma-color-text-brand)";
+  card.appendChild(save);
+  card.appendChild(el("div", "muted", "It saves to your Downloads folder. If nothing appeared there, click the link above."));
+  if (left) card.appendChild(el("div", "warn", `${left} banner${left === 1 ? " was" : "s were"} left out because ${left === 1 ? "it isn't" : "they aren't"} to spec — see the report.`));
+  result.appendChild(card);
+}
+
+let currentMode = "content";
+document.querySelectorAll(".modes button").forEach(b => b.addEventListener("click", () => {
+  currentMode = b.dataset.mode;
+  // Export has nothing to do with removing animation; the count isn't made there.
+  clear.classList.toggle("hidden", currentMode === "export");
+}));
+
+go.addEventListener("click", () => {
+  if (currentMode === "export") {
+    if (go.dataset.action === "download") downloadAll();
+    else buildAll();
+    return;
+  }
+  // A big run takes a second click that states its size.
+  let n = 0;
+  out.querySelectorAll("input.t:checked").forEach(c => { n += Number(c.dataset.n || 1); });
+  if (n > BIG && !goArmed) {
+    go.classList.add("danger");
+    go.textContent = `Click again to change ${n.toLocaleString()} layers`;
+    goArmed = setTimeout(count, 5000);
+    return;
+  }
+  clearTimeout(goArmed); goArmed = null;
+  if (currentMode === "suite") {
+    const steps = [...out.querySelectorAll("input.t:checked")].map(c => Number(c.dataset.step));
+    go.disabled = true;
+    go.textContent = "Copying…";
+    result.innerHTML = "";
+    parent.postMessage({ pluginMessage: { type: "applySuite", steps } }, "*");
+    return;
+  }
+  const targets = {};
+  const add = (src, id) => { (targets[src] = targets[src] || []).push(id); };
+  out.querySelectorAll("input.t:checked").forEach(c => {
+    if (c.dataset.pairs) JSON.parse(c.dataset.pairs).forEach(([src, id]) => add(src, id));
+    else add(c.dataset.src, c.dataset.id);
+  });
+  go.disabled = true;
+  go.textContent = "Copying…";
+  result.innerHTML = "";
+  parent.postMessage({ pluginMessage: { type: "apply", targets } }, "*");
+});
+
+onmessage = ev => {
+  const msg = ev.data.pluginMessage;
+  if (!msg) return;
+  if (msg.type === "progress") {
+    const st = document.getElementById("status");
+    st.textContent = msg.text || "Ready";
+    st.title = msg.text || "";
+    st.classList.toggle("busy", !!msg.text);
+  }
+  if (msg.type === "crash") {
+    releaseWaiting(msg.text);
+    result.innerHTML = "";
+    const card = el("div", "card");
+    card.appendChild(el("div", "err", msg.text));
+    if (msg.detail) card.appendChild(el("pre", "where", msg.detail));
+    card.appendChild(el("div", "muted", msg.text.startsWith("Scanning")
+      ? "A scan doesn't change anything, so the file is untouched. Copy this message to whoever maintains the plugin."
+      : "Some layers may already have changed. Browse restore points (below) to put them back — not ⌘Z, which undoes a long run only in pieces. Copy this message to whoever maintains the plugin."));
+    result.appendChild(card);
+    go.disabled = false;
+    count();
+  }
+  if (msg.type === "clearReview") renderClearReview(msg);
+  // A new scan means the selection or page changed; a review would be stale.
+  if (msg.type === "others" && msg.count === null) { const r = document.getElementById("review"); if (r) r.remove(); }
+  if (msg.type === "history") {
+    points = msg.points || [];
+    historyInfo = { page: msg.page || "", error: msg.error || "" };
+    historyLabel();
+    if (view === "history" && !document.getElementById("review")) renderHistory();
+  }
+  if (msg.type === "goBackReview") renderGoBackReview(msg);
+  if (msg.type === "running") {
+    stop.classList.toggle("hidden", !msg.on);
+    stop.disabled = false;
+    stop.textContent = "Stop";
+    go.classList.toggle("hidden", msg.on);
+    clear.classList.toggle("hidden", msg.on || currentMode === "export");
+    document.querySelectorAll(".modes button").forEach(b => { b.disabled = msg.on; });
+  }
+  if (msg.type === "restored") {
+    result.innerHTML = "";
+    const card = el("div", "card");
+    card.appendChild(el("div", msg.failed.length ? "err" : "ok",
+      `Restored ${msg.restored} layer${msg.restored === 1 ? "" : "s"} to how they were before “${msg.label}”` +
+      (msg.stopped ? " — stopped part-way. Going back again finishes it." : msg.failed.length ? `, ${msg.failed.length} couldn't be:` : ".")));
+    for (const f of msg.failed.slice(0, 5)) card.appendChild(el("div", "muted", `${f.where}: ${f.error}`));
+    if (msg.failed.length > 5) card.appendChild(el("div", "muted", `…and ${msg.failed.length - 5} more.`));
+    if (msg.versionSaved) card.appendChild(el("div", "muted", "A version was saved first — File › Show version history rolls back to it."));
+    result.appendChild(card);
+  }
+  if (msg.type === "exported") { const res = waiting.get(msg.id); if (res) { waiting.delete(msg.id); res(msg); } }
+  if (msg.type === "plan") {
+    if (building) return;   // a selection change mid-build mustn't wipe the list
+    if (view === "plan") render(msg); else stashedPlan = msg;
+  }
+  if (msg.type === "others") { others = msg.count; selected = msg.selected; clearLabel(); }
+  if (msg.type === "cleared") {
+    result.innerHTML = "";
+    const card = el("div", "card");
+    card.appendChild(el("div", msg.failed.length ? "err" : "ok",
+      msg.refused ? "Select what to keep first. With nothing selected this would clear the whole page."
+      : `Removed animation from ${msg.cleared} layer${msg.cleared === 1 ? "" : "s"}` +
+        (msg.stopped ? " — stopped part-way. A restore point covers what was removed." : msg.failed.length ? `, ${msg.failed.length} couldn't be cleared:` : ". A restore point can bring it back.") +
+        (msg.vanished ? ` ${msg.vanished} layer${msg.vanished === 1 ? "" : "s"} had already been rebuilt by Figma and were skipped.` : "")));
+    if (msg.versionSaved) card.appendChild(el("div", "muted", "A version was saved first — File › Show version history rolls back to it."));
+    for (const f of msg.failed.slice(0, 5)) card.appendChild(el("div", "muted", `${f.where}: ${f.error}`));
+    result.appendChild(card);
+  }
+  if (msg.type === "done") {
+    result.innerHTML = "";
+    const card = el("div", "card");
+    card.appendChild(el("div", msg.failed.length ? "err" : "ok",
+      (msg.stopped ? `Stopped after ${msg.done} of ${msg.total.toLocaleString()} layers` : `Copied to ${msg.done} layer${msg.done === 1 ? "" : "s"}`) +
+      (msg.failed.length ? `, ${msg.failed.reduce((n, f) => n + (f.count || 1), 0)} not copied:` : ".") +
+      (msg.stopped ? " A restore point covers what was copied." : "")));
+    // The same error usually repeats on every banner; show it once with a count,
+    // and enough about each layer to find it and see why Figma refused it.
+    const groups = new Map();
+    for (const f of msg.failed) {
+      const g = groups.get(f.error) || { n: 0, items: [] };
+      g.n += f.count || 1;
+      if (g.items.length < 5) g.items.push(f);
+      groups.set(f.error, g);
+    }
+    for (const [error, g] of groups) {
+      card.appendChild(el("div", null, `${g.n} × ${error}`));
+      for (const f of g.items) {
+        const row = el("div", "row");
+        const txt = el("div");
+        if (f.id) {
+          const a = el("a", null, "Show");
+          a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: f.id } }, "*"));
+          row.appendChild(a);
+        }
+        txt.appendChild(el("div", "where", f.where));
+        if (f.detail) txt.appendChild(el("div", "where", f.detail));
+        row.appendChild(txt);
+        card.appendChild(row);
+      }
+    }
+    if (msg.versionSaved) card.appendChild(el("div", "muted", "A version was saved first — File › Show version history rolls back to it."));
+    if (msg.extended) card.appendChild(el("div", "muted",
+      `Lengthened ${msg.extended} timeline${msg.extended === 1 ? "" : "s"} to fit the copied animation.`));
+    result.appendChild(card);
+    count();
+  }
+};
+// The plugin can post before this panel is listening, so ask for the restore
+// state once it is.
+parent.postMessage({ pluginMessage: { type: "ready" } }, "*");
+</script>

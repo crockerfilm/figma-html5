@@ -1439,7 +1439,10 @@ async function downloadAll() {
     while (used.has(fn)) fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}-${k++}`;
     used.add(fn);
     files.push({ name: `${fn}.zip`, data: new Uint8Array(await inner.arrayBuffer()) });
-    csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), n3(b.duration), b.notes.join(" | ")]);
+    // Everything worth knowing about a banner that passed: automatic size fixes
+    // and motion that couldn't be carried across, both from its checks.
+    const notes = b.out.results.filter(r => r.status === "warn" || r.status === "fixed").map(r => r.detail);
+    csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), n3(b.duration), notes.join(" | ")]);
   }
   const esc = v => `"${String(v).replace(/"/g, '""')}"`;
   files.push({ name: "report.csv", data: new TextEncoder().encode(csv.map(r => r.map(esc).join(",")).join("\n")) });

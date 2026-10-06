@@ -1415,8 +1415,7 @@ async function exportBanner(id) {
     // measured from the SVG's own corner, and a size change is reported.
     const frameBox = copy.absoluteBoundingBox;
     const svgBox = copy.absoluteRenderBounds || frameBox;
-    if (svgBox && frameBox && (Math.round(svgBox.width) !== Math.round(frameBox.width) || Math.round(svgBox.height) !== Math.round(frameBox.height)))
-      notes.push(`The export is ${Math.round(svgBox.width)}×${Math.round(svgBox.height)}, not the frame's ${Math.round(frameBox.width)}×${Math.round(frameBox.height)}, because something renders past the frame's edge (an overhanging layer with Clip content off, or a shadow). Turn on Clip content in Figma.`);
+    // (A size difference is checked, and blocks, in the panel.)
 
     // 3. Motion. Figma doesn't report keyframes for saved styles, and works
     //    out a preset's keyframes too late for a plugin to read. But every

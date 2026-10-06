@@ -1731,6 +1731,22 @@ async function buildOne(b) {
   const outp = await Converter.run({ name: `${fileName}.svg`, text: async () => anim.svg });
   // Motion that couldn't be carried across goes in the report as warnings.
   for (const note of anim.notes) outp.results.push({ rule: { id: "motion", title: "Motion" }, status: "warn", detail: note });
+  // The delivered ad must be exactly the frame's size, and the frame exactly the
+  // size its name promises. Either mismatch gets rejected by the ad server, so
+  // both block rather than note.
+  const sizeRule = { id: "frame-size", title: "Exports at the size the frame is meant to be" };
+  if (outp.ctx && (outp.ctx.width !== payload.width || outp.ctx.height !== payload.height))
+    outp.results.push(Object.assign({ rule: sizeRule }, {
+      status: "block",
+      detail: `The export came out ${outp.ctx.width}×${outp.ctx.height}, but the frame is ${payload.width}×${payload.height} — something renders past the frame's edge.`,
+      todo: "Turn on Clip content for this frame, or move the overhanging layer (or its shadow) inside the edge." }));
+  const promised = /^(\d+)\s*[x×]\s*(\d+)$/.exec(String(payload.name).trim());
+  if (promised && (+promised[1] !== payload.width || +promised[2] !== payload.height))
+    outp.results.push(Object.assign({ rule: sizeRule }, {
+      status: "block",
+      detail: `The frame is named ${promised[1]}×${promised[2]} but is actually ${payload.width}×${payload.height}.`,
+      todo: `Resize the frame to ${promised[1]}×${promised[2]} in Figma (or rename it if ${payload.width}×${payload.height} is the size you want).` }));
+
   // If none of the animated layers converted, the web tool's "static export"
   // advice would mislead — say what actually happened instead.
   if (!anim.animatedLayers.length) {

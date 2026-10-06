@@ -1550,6 +1550,8 @@ figma.ui.onmessage = msg => {
   if (msg.type === "select") runSelect(msg.ids);
   if (msg.type === "deletePoint") deletePoint(msg.id);
   if (msg.type === "stop") stopRequested = true;
+  // The gallery wants a bigger window; the panel asks, the plugin resizes.
+  if (msg.type === "resize") figma.ui.resize(Math.round(msg.w), Math.round(msg.h));
   if (msg.type === "ready") postHistory();
   if (msg.type === "focus") {
     figma.getNodeByIdAsync(msg.id).then(n => { if (n) figma.viewport.scrollAndZoomIntoView([n]); });

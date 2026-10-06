@@ -67,6 +67,11 @@ web tool's own checks and packaging. Click a built banner to preview it with a s
 headline, size, KB, length, notes). Banners that don't meet spec are left out, as on the
 web tool.
 
+**Preview all** opens every built banner side by side in a larger window, each playing
+live: *Play all* restarts them together, one scrubber moves them all to the same moment,
+*End frames* shows each one's last frame. Filter to Ready or Not to spec; 12 per page.
+Click a banner for its full preview and spec checks.
+
 **Plays** (once, 2 or 3) and **Pause between plays** sit above the list and are the same
 option as on the web tool: the end frame holds for the pause, then the animation replays,
 and the last play ends on the end frame. Total time is plays × length + the pauses between,

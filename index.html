@@ -1205,7 +1205,7 @@ $("dlZip").addEventListener("click", async () => {
  * lets you scrub the animation. Entirely separate from the convert pipeline
  * above; it reads what is in the file rather than rebuilding anything.
  * ========================================================================== */
-const BUILD = "2026-10-06b";
+const BUILD = "2026-10-07";
 $("build").textContent = "build " + BUILD;
 $("ispecline").textContent = $("specline").textContent;
 
@@ -1427,7 +1427,7 @@ function inlinePreview(audit) {
   return /<\/body>/i.test(out) ? out.replace(/<\/body>/i, SEEK_SCRIPT + "</body>") : out + SEEK_SCRIPT;
 }
 
-let iFrame = null, iDuration = 0, iPlaying = true;
+let iFrame = null, iDuration = 0, iPlaying = true, iProbes = 0;
 
 function mountInspect(audit) {
   const stage = $("istage");
@@ -1445,12 +1445,20 @@ function mountInspect(audit) {
   stage.appendChild(f);
   iFrame = f;
 
+  iProbes = 0;
   f.onload = () => setTimeout(() => f.contentWindow.postMessage({ cmd: "probe" }, "*"), 300);
 }
 
 window.addEventListener("message", e => {
   const d = e.data || {};
   if (d.type !== "probe") return;
+  // A frame that loads before its panel is on screen hasn't started its
+  // animations yet, so an empty answer is asked again before it's believed.
+  if (!d.max && iFrame && ++iProbes < 8) {
+    const f = iFrame;
+    setTimeout(() => { if (f === iFrame) f.contentWindow.postMessage({ cmd: "probe" }, "*"); }, 400);
+    return;
+  }
   iDuration = d.max || 0;
   $("itime").textContent = iDuration
     ? `0.00s / ${(iDuration / 1000).toFixed(2)}s · ${d.count} animations`

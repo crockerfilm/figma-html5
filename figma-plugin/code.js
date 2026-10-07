@@ -1547,16 +1547,21 @@ function applySuite(steps) {
 // Clicking down to a banner passes through several selections in a row. Stop
 // whatever scan is running straight away, but only start a new one once the
 // selection has settled.
-let settle = null, quietUntil = 0;
+let settle = null, quiet = "";
 // Selecting layers for the person to look at (Select, Show layers) mustn't
-// re-plan from them: that replaced the list they were working from.
+// re-plan from them: that replaced the list they were working from. Only the
+// exact selection the plugin made is let through quietly.
+const selKey = nodes => nodes.map(n => n.id).sort().join(",");
 function selectQuietly(nodes) {
-  quietUntil = Date.now() + 1000;
+  clearTimeout(settle);   // a re-plan still waiting would plan from these
+  quiet = selKey(nodes);
   figma.currentPage.selection = nodes;
   figma.viewport.scrollAndZoomIntoView(nodes);
 }
 figma.on("selectionchange", () => {
-  if (Date.now() < quietUntil) { quietUntil = 0; return; }
+  const was = quiet;
+  quiet = "";
+  if (was && was === selKey(figma.currentPage.selection)) return;
   scanSeq++;
   clearTimeout(settle);
   say("Selection changed…");

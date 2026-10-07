@@ -823,7 +823,13 @@ function renderSuite(msg) {
   // explained under "Wording differs", so it isn't listed a second time.
   // (The plan clips long copy to 60 characters with "…", so compare the start.)
   const wordings = copyIssues.flat().map(v => v.copy);
-  const isVariant = c => { const head = String(c).replace(/…$/, ""); return wordings.some(w => w.startsWith(head)); };
+  const isVariant = c => {
+    c = String(c);
+    if (!c.trim()) return false;
+    if (!c.endsWith("…")) return wordings.includes(c);
+    const head = c.slice(0, -1);
+    return wordings.some(w => w.startsWith(head));
+  };
   const explained = msg.partial.filter(it => it.texts.every(t => isVariant(t.copy)));
   const partial = msg.partial.filter(it => !explained.includes(it));
   const attention = msg.notReached.length + partial.length + msg.layoutBanners.length;

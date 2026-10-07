@@ -219,7 +219,17 @@ const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
 // be trusted for in some files — its parent, the outermost component instance
 // around it, and whether it and everything above it is visible — worked out
 // walking DOWN from the page. Returns null if a newer scan supersedes it.
+// One scan walks the page once: its plan and its count of other animation
+// share the walk. (Runs pass seq null and always walk fresh.)
+let lastWalk = null;
 async function walkPage(seq, label) {
+  if (seq !== null && lastWalk && lastWalk.seq === seq) return lastWalk.page;
+  const page = await walkPageFresh(seq, label);
+  if (page && seq !== null) lastWalk = { seq, page };
+  return page;
+}
+
+async function walkPageFresh(seq, label) {
   const info = new Map(), list = [];
   const stack = [];
   const top = figma.currentPage.children;
@@ -1550,6 +1560,13 @@ figma.on("selectionchange", () => {
   scanSeq++;
   clearTimeout(settle);
   say("Selection changed…");
+  settle = setTimeout(runScan, 300);
+});
+// Another page has its own banners and its own restore points.
+figma.on("currentpagechange", () => {
+  scanSeq++;
+  clearTimeout(settle);
+  postHistory();
   settle = setTimeout(runScan, 300);
 });
 // Any job that throws reports it in the panel instead of leaving the status

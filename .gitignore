@@ -7,3 +7,5 @@
 *.jpeg
 *.webp
 .DS_Store
+# A packaged or unzipped copy of the plugin (the source is figma-plugin/).
+/Copy Motion/

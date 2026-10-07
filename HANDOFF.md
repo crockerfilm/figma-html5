@@ -328,6 +328,13 @@ Development → Import plugin from manifest → `figma-plugin/manifest.json`. Us
   generated — edit `figma-plugin/src/ui.html`, then rebuild. Change the checks once.
 - **Safety:** every run saves per-layer restore points (browsable, any point, survives
   closing Figma) and a Figma version first. ⌘Z is not reliable after long runs.
+- **Export, find every banner (2026-10-07):** optional tickbox that lists every frame named
+  by its size (within 2px) on the page instead of using the selection; remembered via
+  `figma.clientStorage`; grouped by parent frame with a tickbox per group.
+- **Sharing with the team:** zip `manifest.json`, `code.js`, `ui.html` and `README.md` from
+  `figma-plugin/` into a folder called `Copy Motion` (the zip is attached to each GitHub
+  release). Teammates import `manifest.json` once in the Figma desktop app; for an update
+  they replace the files in the same folder and reopen the plugin.
 
 Hard-won facts about Figma's plugin API (Oct 2026, Motion beta) — verify before relying:
 - No animated-SVG export for plugins; the setting is silently ignored.

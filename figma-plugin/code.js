@@ -1061,8 +1061,7 @@ async function showPoint(id) {
   if (!p) return;
   const nodes = nodesOf(p).filter(n => !gone(n));
   if (!nodes.length) return post({ type: "crash", text: "None of the layers from that restore point exist any more." });
-  figma.currentPage.selection = nodes;
-  figma.viewport.scrollAndZoomIntoView(nodes);
+  selectQuietly(nodes);
 }
 
 function deletePoint(id) {
@@ -1538,8 +1537,16 @@ function applySuite(steps) {
 // Clicking down to a banner passes through several selections in a row. Stop
 // whatever scan is running straight away, but only start a new one once the
 // selection has settled.
-let settle = null;
+let settle = null, quietUntil = 0;
+// Selecting layers for the person to look at (Select, Show layers) mustn't
+// re-plan from them: that replaced the list they were working from.
+function selectQuietly(nodes) {
+  quietUntil = Date.now() + 1000;
+  figma.currentPage.selection = nodes;
+  figma.viewport.scrollAndZoomIntoView(nodes);
+}
 figma.on("selectionchange", () => {
+  if (Date.now() < quietUntil) { quietUntil = 0; return; }
   scanSeq++;
   clearTimeout(settle);
   say("Selection changed…");
@@ -1566,8 +1573,7 @@ const runSelect = guard(async ids => {
   const nodes = [];
   for (const id of ids) { const n = await figma.getNodeByIdAsync(id); if (!gone(n)) nodes.push(n); }
   if (!nodes.length) return;
-  figma.currentPage.selection = nodes;
-  figma.viewport.scrollAndZoomIntoView(nodes);
+  selectQuietly(nodes);
 }, "Selecting");
 
 figma.ui.onmessage = msg => {

@@ -1404,7 +1404,6 @@ function syncFooter() {
   clear.classList.toggle("hidden", away || currentMode === "export");
   document.querySelectorAll(".modes button").forEach(b => { b.disabled = runningNow || building || view === "history"; });
 }
-// Results and reviews sit above the plan; bring a new one into view.
 // Results and reviews sit above the plan; bring a new one into view. A result
 // stays until dismissed or the next run, so it gets a close button (a review
 // has its own Cancel).
@@ -2377,7 +2376,12 @@ function renderGallery() {
     tile.appendChild(box);
     const cap = el("div", "cap");
     cap.appendChild(el("div", r.ok ? "ok" : "err", `${r.ok ? "✓" : "✗"} ${W}×${H}${r.ok ? ` · ${Converter.kb(r.out.chosen.zipBytes)} · ${dur(r.duration)}` : ""}`));
-    cap.appendChild(el("div", "where", (r.payload && r.payload.headline) || plan.where));
+    // Many banners share a headline, so say which group each one is in too.
+    const group = String(plan.where || "").split(" › ").pop();
+    const headline = (r.payload && r.payload.headline) || "";
+    const sub = el("div", "where", [group, headline].filter(Boolean).join(" · "));
+    sub.title = plan.where;
+    cap.appendChild(sub);
     tile.appendChild(cap);
     tile.title = "Open this banner's full preview and checks";
     tile.addEventListener("click", () => closeGallery(plan.id));

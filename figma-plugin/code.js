@@ -319,6 +319,12 @@ async function scan() {
   const seq = ++scanSeq;
   const sel = figma.currentPage.selection;
   post({ type: "others", count: null, selected: sel.length });
+  // Export can list every banner on the page instead of the selection.
+  if (mode === "export" && exportAll) {
+    await scanExportPage(seq);
+    if (!stale(seq)) { postHistory(); say(""); }
+    return;
+  }
   if (!sel.length)
     post({ type: "plan", mode, error: {
       layout: "Select the banner(s) you animated. Each one is copied to every other banner of the same size.",
@@ -1316,6 +1322,45 @@ function bannersIn(sel) {
   return out;
 }
 
+// "Find every banner on this page": every frame named by its size (300x250,
+// 300 x 250, 300×250) that really is about that size. A banner nested in
+// another, or a frame inside a component, isn't a banner of its own. The
+// choice is remembered on this computer.
+let exportAll = false;
+const SIZE_NAME = /^\s*(\d{2,4})\s*[x×X]\s*(\d{2,4})\s*$/;
+async function scanExportPage(seq) {
+  const page = await walkPage(seq, "Looking for banners on this page");
+  if (!page) return;
+  const found = [], ids = new Set();
+  let offSize = 0;
+  for (let i = 0; i < page.list.length; i++) {
+    if (i % 500 === 0) { await pause(`Looking for banners — ${plural(i, "layer")} of ${page.list.length.toLocaleString()} checked`); if (stale(seq)) return; }
+    const n = page.list[i];
+    if (n.type !== "FRAME" && n.type !== "COMPONENT" && n.type !== "INSTANCE") continue;
+    const m = SIZE_NAME.exec(n.name);
+    if (!m || page.inst(n)) continue;
+    let nested = false;
+    for (const a of page.ancestors(n)) if (ids.has(a)) { nested = true; break; }
+    if (nested) continue;
+    // Off by a pixel or two is fixed on export; more than that is something
+    // else that happens to be named by a size (a scaled-down mockup, say).
+    if (Math.abs(n.width - +m[1]) > 2 || Math.abs(n.height - +m[2]) > 2) { offSize++; continue; }
+    ids.add(n.id);
+    found.push(n);
+  }
+  if (!found.length)
+    return post({ type: "plan", mode, auto: true, error: "No frames on this page are named by their size (like 300x250). Name each banner frame by its size, or untick this and select the banners instead." });
+  const list = [];
+  for (const [i, b] of found.entries()) {
+    if (i % 10 === 0) { await pause(`Reading banner ${i + 1} of ${found.length}`); if (stale(seq)) return; }
+    const up = page.ancestors(b).next().value || "";   // the frame it sits in, which groups it
+    list.push({ id: b.id, name: b.name, where: where(b), group: up, w: Math.round(b.width), h: Math.round(b.height), hidden: !page.shown(b),
+                animated: (hasMotion(b) ? 1 : 0) + b.findAll(hasMotion).length });
+  }
+  if (stale(seq)) return;
+  post({ type: "plan", mode, auto: true, offSize, banners: list });
+}
+
 async function scanExport(seq, sel) {
   say("Finding banners to export…");
   const banners = bannersIn(sel);
@@ -1324,7 +1369,9 @@ async function scanExport(seq, sel) {
   const list = [];
   for (const [i, b] of banners.entries()) {
     if (i % 10 === 0) { await pause(`Reading banner ${i + 1} of ${banners.length}`); if (stale(seq)) return; }
-    list.push({ id: b.id, name: b.name, where: where(b), w: Math.round(b.width), h: Math.round(b.height),
+    let up = "";
+    try { up = b.parent ? b.parent.id : ""; } catch (e) { /* grouped by name instead */ }
+    list.push({ id: b.id, name: b.name, where: where(b), group: up, w: Math.round(b.width), h: Math.round(b.height),
                 animated: (hasMotion(b) ? 1 : 0) + b.findAll(hasMotion).length });
   }
   if (stale(seq)) return;
@@ -1562,6 +1609,9 @@ figma.on("selectionchange", () => {
   const was = quiet;
   quiet = "";
   if (was && was === selKey(figma.currentPage.selection)) return;
+  // Listing every banner on the page doesn't depend on the selection, and a
+  // re-plan would throw away banners already built.
+  if (mode === "export" && exportAll) return;
   scanSeq++;
   clearTimeout(settle);
   say("Selection changed…");
@@ -1601,6 +1651,11 @@ const runSelect = guard(async ids => {
 figma.ui.onmessage = msg => {
   if (msg.type === "scan") runScan();
   if (msg.type === "mode") { mode = msg.mode; runScan(); }
+  if (msg.type === "exportAll") {
+    exportAll = !!msg.on;
+    figma.clientStorage.setAsync("exportAll", exportAll).catch(() => { /* remembered for this session only */ });
+    runScan();
+  }
   if (msg.type === "apply") runApply(msg.targets);
   if (msg.type === "applySuite") runSuite(msg.steps);
   if (msg.type === "reviewClear") runReview();
@@ -1621,4 +1676,7 @@ figma.ui.onmessage = msg => {
   }
 };
 postHistory();
-runScan();
+Promise.resolve()
+  .then(() => figma.clientStorage.getAsync("exportAll"))
+  .then(v => { exportAll = !!v; }, () => { /* not remembered; default off */ })
+  .then(() => { post({ type: "settings", exportAll }); runScan(); });

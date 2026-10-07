@@ -39,11 +39,12 @@
     border-radius: 50%; background: var(--figma-color-text-brand); vertical-align: 1px;
     animation: blink 1s ease-in-out infinite; }
   @keyframes blink { 50% { opacity: .25; } }
+  .xgroup span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .xhead { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
   .xhead .sum { color: var(--figma-color-text-secondary); }
   .xhead .sp { flex: 1; }
   .xhead a, .xrow .name { color: var(--figma-color-text-brand); cursor: pointer; }
-  .xgroup { margin-top: 10px; font-size: 11px; color: var(--figma-color-text-secondary);
+  .xgroup { display: flex; align-items: center; cursor: pointer; margin-top: 10px; font-size: 11px; color: var(--figma-color-text-secondary);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid var(--figma-color-border); padding-bottom: 3px; }
   .xrow { display: grid; grid-template-columns: 16px 1fr auto; gap: 2px 8px; align-items: center; padding: 5px 0; }
   .xrow .name { font-weight: 600; }
@@ -1569,7 +1570,7 @@ const HELP = {
   content: "Select your animated banner. Its animation goes to every layer showing the same copy, picture or component.",
   layout: "Select animated banner(s). Each one's animation goes to the same spots in every other banner its size.",
   suite: "Select your one animated banner. The plugin plans its animation across every banner, and changes nothing until you copy.",
-  export: "Select banners, or a Version frame or section. Each is checked against the spec; only passing banners are downloaded."
+  export: "Select banners or a Version frame — or tick Find every banner below. Each is checked against the spec; only passing banners are downloaded."
 };
 document.querySelectorAll(".modes button").forEach(b => b.addEventListener("click", () => {
   document.querySelectorAll(".modes button").forEach(x => x.classList.toggle("on", x === b));
@@ -1595,7 +1596,12 @@ function count() {
 
 function render(msg) {
   out.innerHTML = "";
-  if (msg.error) { out.appendChild(el("div", "card muted", msg.error)); entries = []; count(); return; }
+  if (msg.mode === "export" && "auto" in msg) exportAllOn = !!msg.auto;
+  if (msg.error) {
+    const card = el("div", "card muted", msg.error);
+    if (msg.mode === "export") card.appendChild(exportAllToggle());
+    out.appendChild(card); entries = []; count(); return;
+  }
   if (msg.mode === "layout") return renderLayout(msg);
   if (msg.mode === "suite") return renderSuite(msg);
   if (msg.mode === "export") return renderExport(msg);
@@ -1911,9 +1917,33 @@ let exportLoop = { plays: 1, pause: 0 };
 const fixSizeFor = new Set();   // banners the person chose to export at their named size
 const waiting = new Map();   // banner id → resolver for its "exported" message
 
+// "Find every banner on this page" instead of using the selection. The plugin
+// remembers it and tells the panel at start-up.
+let exportAllOn = false;
+function exportAllToggle() {
+  const lab = el("label", "xopts");
+  lab.style.cursor = "pointer";
+  const cb = el("input"); cb.type = "checkbox"; cb.checked = exportAllOn;
+  cb.addEventListener("change", () => {
+    exportAllOn = cb.checked;
+    out.innerHTML = "";
+    out.appendChild(el("div", "card muted", cb.checked ? "Looking for banners on this page…" : "Using your selection…"));
+    parent.postMessage({ pluginMessage: { type: "exportAll", on: cb.checked } }, "*");
+  });
+  lab.appendChild(cb);
+  lab.appendChild(document.createTextNode("Find every banner on this page (frames named by size, like 300x250)"));
+  return lab;
+}
+
 const slug = s => String(s).replace(/×/g, "x").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "banner";
 
 function exportButton() {
+  out.querySelectorAll("input.xg").forEach(g => {
+    const rows = [...out.querySelectorAll(`input.xb[data-group="${g.dataset.group}"]`)];
+    const on = rows.filter(c => c.checked).length;
+    g.checked = on > 0 && on === rows.length;
+    g.indeterminate = on > 0 && on < rows.length;
+  });
   const pa = document.getElementById("previewAll");
   if (pa) { pa.classList.toggle("hidden", !built.size); pa.textContent = `Preview all ${built.size}`; }
   updateSummary();
@@ -1936,10 +1966,39 @@ function exportButton() {
   }
 }
 
+// Banners grouped by the frame they sit in, each group kept together, and a
+// heading for each: the shortest end of its path that no other group shares,
+// numbered where frames share a name ("Version A (2 of 5)").
+function exportGroups(banners) {
+  const groups = new Map();
+  for (const b of banners) {
+    const k = b.group || b.where || "";
+    if (!groups.has(k)) groups.set(k, { where: b.where || "", items: [] });
+    groups.get(k).items.push(b);
+  }
+  const list = [...groups.values()];
+  const paths = [...new Set(list.map(g => g.where))].map(w => w.split(" › "));
+  const tail = (parts, k) => parts.slice(-k).join(" › ");
+  const label = w => {
+    const parts = w.split(" › ");
+    for (let k = 1; k < parts.length; k++)
+      if (paths.every(p => p.join(" › ") === w || tail(p, k) !== tail(parts, k))) return tail(parts, k);
+    return w;
+  };
+  const seen = new Map();
+  for (const g of list) {
+    g.label = g.where ? label(g.where) : "This page";
+    const same = list.filter(x => x.where === g.where).length;
+    if (same > 1) { const i = (seen.get(g.where) || 0) + 1; seen.set(g.where, i); g.label += ` (${i} of ${same})`; }
+  }
+  return list;
+}
+
 function renderExport(msg) {
   if (document.getElementById("gallery")) closeGallery();
   // A new selection is a new export: earlier builds may be out of date.
-  exportPlan = msg.banners;
+  const groups = exportGroups(msg.banners);
+  exportPlan = groups.flatMap(g => g.items);
   built = new Map();
   fixSizeFor.clear();
   previewId = null;
@@ -1964,6 +2023,13 @@ function renderExport(msg) {
   });
   head.appendChild(pick);
   card.appendChild(head);
+  card.appendChild(exportAllToggle());
+  if (msg.auto) {
+    const n = el("div", "muted", "Only frames named by their size are found. To export one named otherwise, untick this and select it." +
+      (msg.offSize ? ` ${msg.offSize} frame${msg.offSize === 1 ? " is" : "s are"} named by a size more than 2px off it (a scaled mockup, say) and left out.` : ""));
+    n.style.cssText = "font-size:11px;margin-top:4px";
+    card.appendChild(n);
+  }
 
   // Plays and a pause between them — the same option as the web tool. The
   // banners are packaged with it, so changing it means building again.
@@ -2002,34 +2068,38 @@ function renderExport(msg) {
   // long board name, so the heading leaves that off and shows what differs.
   const list = el("div");
   list.id = "xlist";
-  const paths = exportPlan.map(b => String(b.where || "").split(" › "));
-  let common = 0;
-  while (paths.length && paths.every(p => p.length > common + 1 && p[common] === paths[0][common])) common++;
-  let group = null;
-  for (const b of exportPlan) {
-    if (b.where !== group) {
-      group = b.where;
-      const parts = String(group || "").split(" › ");
-      const gh = el("div", "xgroup", group ? parts.slice(Math.min(common, parts.length - 1)).join(" › ") : "This page");
-      gh.title = group;
-      list.appendChild(gh);
+  for (const [gi, g] of groups.entries()) {
+    // Tick or untick a whole group at once — e.g. a board of mockups.
+    const gh = el("label", "xgroup");
+    gh.title = g.where;
+    const gcb = el("input", "xg"); gcb.type = "checkbox"; gcb.dataset.group = gi;
+    gcb.style.margin = "0 6px 0 0";
+    gcb.addEventListener("change", () => {
+      out.querySelectorAll(`input.xb[data-group="${gcb.dataset.group}"]`).forEach(c => { c.checked = gcb.checked; });
+      exportButton();
+    });
+    gh.appendChild(gcb);
+    gh.appendChild(el("span", null, g.label));
+    list.appendChild(gh);
+    for (const b of g.items) {
+      const row = el("div", "xrow");
+      const cb = el("input", "xb"); cb.type = "checkbox"; cb.checked = b.animated > 0 && !b.hidden; cb.dataset.id = b.id; cb.dataset.group = gi;
+      cb.addEventListener("change", exportButton);
+      const label = el("div");
+      const name = el("span", "name", `${b.w}×${b.h}`);
+      name.title = "Preview this banner";
+      name.addEventListener("click", () => showBanner(b.id));
+      label.appendChild(name);
+      if (!/^\d+\s*[x×]\s*\d+$/.test(b.name)) label.appendChild(el("span", "sub", b.name));
+      if (!b.animated) label.appendChild(el("span", "sub", "· no animation"));
+      if (b.hidden) label.appendChild(el("span", "sub", "· hidden"));
+      const pill = el("span", "pill", "Not built");
+      pill.id = `xs-${b.id}`;
+      const why = el("div", "why");
+      why.id = `xw-${b.id}`;
+      row.appendChild(cb); row.appendChild(label); row.appendChild(pill); row.appendChild(why);
+      list.appendChild(row);
     }
-    const row = el("div", "xrow");
-    const cb = el("input", "xb"); cb.type = "checkbox"; cb.checked = b.animated > 0; cb.dataset.id = b.id;
-    cb.addEventListener("change", exportButton);
-    const label = el("div");
-    const name = el("span", "name", `${b.w}×${b.h}`);
-    name.title = "Preview this banner";
-    name.addEventListener("click", () => showBanner(b.id));
-    label.appendChild(name);
-    if (!/^\d+\s*[x×]\s*\d+$/.test(b.name)) label.appendChild(el("span", "sub", b.name));
-    if (!b.animated) label.appendChild(el("span", "sub", "· no animation"));
-    const pill = el("span", "pill", "Not built");
-    pill.id = `xs-${b.id}`;
-    const why = el("div", "why");
-    why.id = `xw-${b.id}`;
-    row.appendChild(cb); row.appendChild(label); row.appendChild(pill); row.appendChild(why);
-    list.appendChild(row);
   }
   card.appendChild(list);
   out.appendChild(card);
@@ -2513,6 +2583,7 @@ onmessage = ev => {
     count();
   }
   if (msg.type === "clearReview") renderClearReview(msg);
+  if (msg.type === "settings") exportAllOn = !!msg.exportAll;
   // A new scan means the selection or page changed; a review would be stale.
   if (msg.type === "others" && msg.count === null) { const r = document.getElementById("review"); if (r) r.remove(); }
   if (msg.type === "history") {

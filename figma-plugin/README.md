@@ -60,7 +60,13 @@ hero's size (e.g. "Acme is migrating…" vs "Acme migrated…"), which step 3 ca
 ## Export mode (HTML5)
 
 Select the banners to export, or a Version frame or section that holds them; each frame
-directly inside a board (a section, or a frame over 2000px) is one banner. **Build and
+directly inside a board (a section, or a frame over 2000px) is one banner. Or tick **Find
+every banner on this page**: every frame named by its size (`300x250`, `300 x 250`,
+`300×250`) that is within 2px of that size is listed, whatever is selected — not frames
+nested inside another banner or inside a component. The choice is remembered, and while
+it's on, clicking around in Figma doesn't reset what you've built. Banners are grouped by
+the frame they sit in; tick a group's heading to take or drop the whole group (a board of
+mockups, say). **Build and
 check** exports each banner from Figma, rebuilds its Motion animation as CSS, then runs the
 web tool's own checks and packaging. Click a built banner to preview it with a scrubber and
 *End frame*. **Download** gives one zip: a zip per banner that passed, named

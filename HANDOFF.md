@@ -355,8 +355,9 @@ it, and uses a fractional iteration count so the last play stops on the end fram
 behaviour. SMIL, long-form and reversed/alternating animation can't be re-timed and are
 left as exported with a warning.
 
-Web tool changes in the same pass (`BUILD 2026-10-06b`, not yet deployed): Inspect now reads
+Web tool changes in the same pass (`BUILD 2026-10-07`, not yet deployed): Inspect now reads
 inline-style, long-form and SMIL loops; animation shorthands split correctly around
 `cubic-bezier(…)`; capping a long-form infinite loop writes valid CSS; the click handler
 re-checks clickTag is http(s) at click time (matching an approved client banner); the ad's
-`<title>` is escaped.
+`<title>` is escaped; Inspect's scrubber no longer says "no animations found" when the
+preview loads before its panel is visible (the probe retries before believing an empty answer).

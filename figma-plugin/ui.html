@@ -103,18 +103,23 @@ const Converter = (() => {
 // Figma plugin (figma-plugin/build.mjs). Keep it free of page-specific code.
 /* ============================================================================
  * SPEC
- * Seeded from a reference banner that passed its platform's spec checker:
- *   zip 68.5 KB · unzipped 261 KB · 12s animation · every animation 1 iteration
- *   + forwards (zero `infinite`) · raster background delivered as JPEG.
- * Size caps below are the IAB-standard envelope that reference sits inside.
+ * Matched to a banner the client approved (not made with this tool):
+ *   300×250 · zip 78 KB · 10s timeline that loops forever (a timeline event
+ *   jumps back to the start), fading everything out over its last second so
+ *   each loop starts clean · text outlined · JPEG background · no external
+ *   calls · flat package · ad.size meta · IAB clickTag.
+ * So looping forever is allowed and there's no cap on plays or total time.
+ * The 15s limit on one play is a guard, not something that banner sets (its
+ * play is 10s). The 200 KB cap is the IAB-standard envelope it sits inside.
  * Change these numbers if a placement is briefed differently — nothing else
  * in this file needs to change.
  * ========================================================================== */
 const SPEC = {
   maxZipKB: 200,               // max initial load for an HTML ad tag
-  maxAnimationSeconds: 15,     // total animation time, including loops
-  maxLoops: 3,                 // and no more than this many plays
-  holdOnLastFrame: true,       // animation must stop, not loop forever
+  maxAnimationSeconds: 15,     // one play of the timeline
+  maxTotalSeconds: Infinity,   // across all plays (Infinity: no limit)
+  maxLoops: Infinity,          // plays (Infinity: no cap)
+  holdOnLastFrame: false,      // true: the animation must stop, not loop forever
   requireOutlinedText: true,   // no font dependency at render time
   allowExternalRefs: false,    // creative must be self-contained
   jpegQuality: 0.8,
@@ -634,7 +639,9 @@ function applyLoop(doc, plays, pause) {
   const T = Math.max(...uses.map(a => a.delay + a.duration));
   if (!(T > 0)) return { ok: false, reason: "the animation has no length" };
   const H = plays > 1 ? Math.max(0, pause) : 0, C = T + H;
-  const count = plays > 1 ? +(plays - H / C).toFixed(4) : 1;
+  // Forever: every play is the whole cycle. Otherwise the last play stops as
+  // the motion ends (a fractional count), with no trailing pause.
+  const count = plays === Infinity ? "infinite" : plays > 1 ? +(plays - H / C).toFixed(4) : 1;
   const pct = t => `${+(Math.min(1, Math.max(0, t / C)) * 100).toFixed(3)}%`;
   const still = body => body.replace(/(-webkit-)?animation-timing-function\s*:[^;}]*;?/g, "");
   const remap = (name, b, delay, dur) => {
@@ -670,7 +677,7 @@ function applyLoop(doc, plays, pause) {
     st.textContent = text;
   }
   if (copies.length && styles[0]) styles[0].textContent += "\n" + copies.join("\n");
-  return { ok: true, timeline: T, total: plays * T + (plays - 1) * H };
+  return { ok: true, timeline: T, total: plays === Infinity ? Infinity : plays * T + (plays - 1) * H };
 }
 
 /* ------------------------------------------------------------- minify ---- */
@@ -757,8 +764,8 @@ ${svgMarkup}
 }
 
 /* ============================================================== pipeline == */
-// opts.plays: "auto" (as exported — an infinite loop is capped to fit the spec)
-// or 1–3; opts.pause: seconds the end frame holds between plays.
+// opts.plays: "auto" (as exported), a number of plays, or "forever"/Infinity;
+// opts.pause: seconds the end frame holds between plays.
 async function run(file, opts = {}) {
   const ctx = inspect(await file.text());
   const results = [];
@@ -774,7 +781,8 @@ async function run(file, opts = {}) {
 
   // Plays chosen by the person replace whatever looping the export had.
   if (opts.plays && opts.plays !== "auto") {
-    const plays = Math.max(1, Math.min(SPEC.maxLoops, Number(opts.plays) || 1));
+    const forever = opts.plays === "forever" || opts.plays === Infinity;
+    const plays = forever ? Infinity : Math.max(1, Math.min(SPEC.maxLoops, Number(opts.plays) || 1));
     const pause = plays > 1 ? Math.max(0, Number(opts.pause) || 0) : 0;
     const playsRule = { id: "plays", title: "Plays" };
     const loop = applyLoop(ctx.doc, plays, pause);
@@ -783,11 +791,16 @@ async function run(file, opts = {}) {
     } else {
       const i = results.findIndex(x => x.rule.id === "loop");
       if (i >= 0) results.splice(i, 1);   // superseded: the plays are now set explicitly
-      const what = plays === 1 ? "Plays once" : `${plays} plays${pause ? `, ${pause}s pause between` : ""}`;
-      results.push({ rule: playsRule, ...(loop.total > SPEC.maxAnimationSeconds + 1e-6
-        ? block(`${what}: ${loop.total.toFixed(1)}s in total, over the ${SPEC.maxAnimationSeconds}s limit.`,
-                `Choose fewer plays or a shorter pause. One play is ${loop.timeline.toFixed(1)}s.`)
-        : pass(`${what} — ${loop.total.toFixed(1)}s in total, ending on the last frame.`)) });
+      const gap = pause ? `, ${pause}s pause between` : "";
+      const what = forever ? `Loops forever${gap}` : plays === 1 ? "Plays once" : `${plays} plays${gap}`;
+      const pending = forever && !SPEC.holdOnLastFrame
+        ? pass(`${what} — ${loop.timeline.toFixed(1)}s per play.`)
+        : forever ? block(`${what}, but this spec needs the animation to stop.`, "Choose a number of plays.")
+        : loop.total > SPEC.maxTotalSeconds + 1e-6
+          ? block(`${what}: ${loop.total.toFixed(1)}s in total, over the ${SPEC.maxTotalSeconds}s limit.`,
+                  `Choose fewer plays or a shorter pause. One play is ${loop.timeline.toFixed(1)}s.`)
+          : pass(`${what} — ${loop.total.toFixed(1)}s in total, ending on the last frame.`);
+      results.push({ rule: playsRule, ...pending });
     }
   }
 
@@ -2035,19 +2048,19 @@ function renderExport(msg) {
   // banners are packaged with it, so changing it means building again.
   const opts = el("div", "xopts");
   const plays = el("select");
-  for (const [v, t] of [["1", "Plays once"], ["2", "Plays twice"], ["3", "Plays 3 times"]]) { const o = el("option", null, t); o.value = v; plays.appendChild(o); }
-  plays.value = String(exportLoop.plays);
+  for (const [v, t] of [["1", "Plays once"], ["2", "Plays twice"], ["3", "Plays 3 times"], ["forever", "Loops forever"]]) { const o = el("option", null, t); o.value = v; plays.appendChild(o); }
+  plays.value = exportLoop.plays === Infinity ? "forever" : String(exportLoop.plays);
   const pause = el("input");
   pause.type = "number"; pause.min = 0; pause.max = 10; pause.step = 0.5; pause.value = exportLoop.pause; pause.style.width = "48px";
   const pauseLab = el("label");
   pauseLab.style.cssText = "display:flex;gap:4px;align-items:center;margin:0";
   pauseLab.appendChild(document.createTextNode("with a"));
   pauseLab.appendChild(pause);
-  pauseLab.appendChild(document.createTextNode("s pause on the end frame between plays"));
+  pauseLab.appendChild(el("span", null, "s pause on the end frame between plays"));
   // A pause only means something between plays.
   const sync = () => { pause.disabled = plays.value === "1"; pauseLab.classList.toggle("hidden", pause.disabled); };
   const changed = () => {
-    exportLoop = { plays: Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0) };
+    exportLoop = { plays: plays.value === "forever" ? Infinity : Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0) };
     sync();
     if (built.size) {
       built = new Map();
@@ -2115,7 +2128,7 @@ function statusText(b) {
   const warns = b.out.results.filter(r => r.status === "warn").length;   // motion notes are among these
   const first = b.out.results.find(r => r.status === "block");
   return blocks ? `✗ Not to spec — ${first.rule.title.toLowerCase()}: ${first.detail}` + (blocks > 1 ? ` (+${blocks - 1} more)` : "")
-    : `✓ Ready — ${Converter.kb(b.out.chosen.zipBytes)}, ${dur(b.duration)}` + (warns ? ` · ${warns} note${warns === 1 ? "" : "s"}` : "");
+    : `✓ Ready — ${Converter.kb(b.out.chosen.zipBytes)}, ${dur(b.duration)}${b.loops ? " a play, looping" : ""}` + (warns ? ` · ${warns} note${warns === 1 ? "" : "s"}` : "");
 }
 
 // A row's state while working: plain text in a neutral pill, no reason line.
@@ -2150,7 +2163,8 @@ function renderStatus(id, b) {
     }
     return;
   }
-  s.textContent = `${Converter.kb(b.out.chosen.zipBytes)} · ${dur(b.duration)}`; s.className = "pill ok";
+  s.textContent = `${Converter.kb(b.out.chosen.zipBytes)} · ${dur(b.duration)}${b.loops ? " ↻" : ""}`; s.className = "pill ok";
+  s.title = b.loops ? "Loops forever; the length shown is one play." : "";
   w.className = "why";
   if (notes.length) w.textContent = notes.map(n => n.detail).join(" ");
 }
@@ -2215,8 +2229,10 @@ async function buildOne(b) {
       presets: a.presets, trace: a.trace, animations: a.animations })),
     presetsOfferedToPlugins: payload.offered,
     svgKB: Math.round(payload.svg.length / 1024) }, null, 1);
-  const plays = exportLoop.plays, total = plays * anim.duration + (plays - 1) * (plays > 1 ? exportLoop.pause : 0);
-  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, onePlay: anim.duration, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
+  // A banner that loops forever has no total; its length is one play.
+  const plays = exportLoop.plays, loops = plays === Infinity;
+  const total = loops ? anim.duration : plays * anim.duration + (plays - 1) * (plays > 1 ? exportLoop.pause : 0);
+  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, onePlay: anim.duration, loops, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
 }
 
 async function buildAll() {
@@ -2321,7 +2337,9 @@ function showBanner(id) {
   row.appendChild(play); row.appendChild(end); row.appendChild(time);
   pv.appendChild(row);
   pv.appendChild(scrub);
-  pv.appendChild(el("div", "muted", "Check the end frame shows the call to action — the ad stops there."));
+  pv.appendChild(el("div", "muted", b.loops
+    ? "Loops forever; this plays one loop. Check the jump from the end back to the start looks clean — fading everything out at the end of the timeline avoids a jump."
+    : "Check the end frame shows the call to action — the ad stops there."));
   }
 
   const checks = el("details");
@@ -2458,7 +2476,7 @@ function renderGallery() {
     }
     tile.appendChild(box);
     const cap = el("div", "cap");
-    cap.appendChild(el("div", r.ok ? "ok" : "err", `${r.ok ? "✓" : "✗"} ${W}×${H}${r.ok ? ` · ${Converter.kb(r.out.chosen.zipBytes)} · ${dur(r.duration)}` : ""}`));
+    cap.appendChild(el("div", r.ok ? "ok" : "err", `${r.ok ? "✓" : "✗"} ${W}×${H}${r.ok ? ` · ${Converter.kb(r.out.chosen.zipBytes)} · ${dur(r.duration)}${r.loops ? " ↻" : ""}` : ""}`));
     // Many banners share a headline, so say which group each one is in too.
     const group = String(plan.where || "").split(" › ").pop();
     const headline = (r.payload && r.payload.headline) || "";
@@ -2489,7 +2507,7 @@ async function downloadAll() {
     // Everything worth knowing about a banner that passed: automatic size fixes
     // and motion that couldn't be carried across, both from its checks.
     const notes = b.out.results.filter(r => r.status === "warn" || r.status === "fixed").map(r => r.detail);
-    csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), n3(b.duration), notes.join(" | ")]);
+    csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), b.loops ? `${n3(b.duration)} per play, loops forever` : n3(b.duration), notes.join(" | ")]);
   }
   const esc = v => `"${String(v).replace(/"/g, '""')}"`;
   files.push({ name: "report.csv", data: new TextEncoder().encode(csv.map(r => r.map(esc).join(",")).join("\n")) });

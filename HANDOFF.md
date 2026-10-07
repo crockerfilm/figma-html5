@@ -69,9 +69,10 @@ needs editing to retarget it at a different placement.** Keep it that way.
 ```js
 const SPEC = {
   maxZipKB: 200,               // max initial load for an HTML ad tag
-  maxAnimationSeconds: 15,     // total animation time, including loops
-  maxLoops: 3,                 // and no more than this many plays
-  holdOnLastFrame: true,
+  maxAnimationSeconds: 15,     // one play of the timeline
+  maxTotalSeconds: Infinity,   // across all plays (Infinity: no limit)
+  maxLoops: Infinity,          // plays (Infinity: no cap)
+  holdOnLastFrame: false,      // true: the animation must stop
   requireOutlinedText: true,
   allowExternalRefs: false,
   jpegQuality: 0.8,
@@ -209,6 +210,20 @@ this codebase is prone to.
 ---
 
 ## 6. Where the spec numbers come from, and what's still uncertain
+
+**Update 2026-10-07 — the spec now matches the client's approved banner, not Amazon Ads.**
+These banners advertise the client; they don't run on Amazon's ad inventory, so Amazon's
+ad-policy page below was the wrong source for timing. A banner the client approved (made in
+Google Web Designer, not with this tool) loops **forever**: a 10s timeline whose timeline event
+jumps back to the start, with everything fading out over the last second so each loop starts
+blank. So: `holdOnLastFrame: false`, `maxLoops: Infinity`, `maxTotalSeconds: Infinity`;
+`maxAnimationSeconds: 15` now means one play and is a guard, not a confirmed rule. Weight (78
+KB zipped), outlined text, JPEG, flat package, ad.size and clickTag all sit inside the
+existing rules. Plays now offers **Loops forever** on the web tool and in the plugin. Note:
+that banner loops in script, which Inspect can't see — it reports one 10s play, correctly
+passing. Get the media team's placement specs to confirm weight and length limits.
+
+Original sourcing, kept for history:
 
 Sourced from Amazon's published
 [technical guidelines](https://advertising.amazon.com/resources/ad-policy/technical-guidelines):

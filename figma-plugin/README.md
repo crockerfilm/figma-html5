@@ -85,10 +85,12 @@ live: *Play all* restarts them together, one scrubber moves them all to the same
 *End frames* shows each one's last frame. Filter to Ready or Not to spec; 12 per page.
 Click a banner for its full preview and spec checks.
 
-**Plays** (once, 2 or 3) and **Pause between plays** sit above the list and are the same
-option as on the web tool: the end frame holds for the pause, then the animation replays,
-and the last play ends on the end frame. Total time is plays × length + the pauses between,
-and must stay within 15 s. Changing them after building marks the banners to build again.
+**Plays** (once, 2, 3 or **Loops forever**) and **Pause between plays** sit above the list
+and are the same option as on the web tool: the end frame holds for the pause, then the
+animation replays. With a number of plays the last play ends on the end frame; with Loops
+forever it never stops (as the client's approved banner does), so fade everything out at the
+end of the timeline for a clean restart. One play must be 15 s or less; there's no limit on
+plays or total time. Changing them after building marks the banners to build again.
 
 The export works on a temporary copy placed on its own at the top of the page — components
 on the copy are detached and its animation cleared so it exports at rest — then deleted;

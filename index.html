@@ -122,6 +122,7 @@
           <option value="1">Once</option>
           <option value="2">2 plays</option>
           <option value="3">3 plays</option>
+          <option value="forever">Loops forever</option>
         </select>
       </label>
       <label>Pause between plays
@@ -206,18 +207,23 @@
 // Figma plugin (figma-plugin/build.mjs). Keep it free of page-specific code.
 /* ============================================================================
  * SPEC
- * Seeded from a reference banner that passed its platform's spec checker:
- *   zip 68.5 KB · unzipped 261 KB · 12s animation · every animation 1 iteration
- *   + forwards (zero `infinite`) · raster background delivered as JPEG.
- * Size caps below are the IAB-standard envelope that reference sits inside.
+ * Matched to a banner the client approved (not made with this tool):
+ *   300×250 · zip 78 KB · 10s timeline that loops forever (a timeline event
+ *   jumps back to the start), fading everything out over its last second so
+ *   each loop starts clean · text outlined · JPEG background · no external
+ *   calls · flat package · ad.size meta · IAB clickTag.
+ * So looping forever is allowed and there's no cap on plays or total time.
+ * The 15s limit on one play is a guard, not something that banner sets (its
+ * play is 10s). The 200 KB cap is the IAB-standard envelope it sits inside.
  * Change these numbers if a placement is briefed differently — nothing else
  * in this file needs to change.
  * ========================================================================== */
 const SPEC = {
   maxZipKB: 200,               // max initial load for an HTML ad tag
-  maxAnimationSeconds: 15,     // total animation time, including loops
-  maxLoops: 3,                 // and no more than this many plays
-  holdOnLastFrame: true,       // animation must stop, not loop forever
+  maxAnimationSeconds: 15,     // one play of the timeline
+  maxTotalSeconds: Infinity,   // across all plays (Infinity: no limit)
+  maxLoops: Infinity,          // plays (Infinity: no cap)
+  holdOnLastFrame: false,      // true: the animation must stop, not loop forever
   requireOutlinedText: true,   // no font dependency at render time
   allowExternalRefs: false,    // creative must be self-contained
   jpegQuality: 0.8,
@@ -737,7 +743,9 @@ function applyLoop(doc, plays, pause) {
   const T = Math.max(...uses.map(a => a.delay + a.duration));
   if (!(T > 0)) return { ok: false, reason: "the animation has no length" };
   const H = plays > 1 ? Math.max(0, pause) : 0, C = T + H;
-  const count = plays > 1 ? +(plays - H / C).toFixed(4) : 1;
+  // Forever: every play is the whole cycle. Otherwise the last play stops as
+  // the motion ends (a fractional count), with no trailing pause.
+  const count = plays === Infinity ? "infinite" : plays > 1 ? +(plays - H / C).toFixed(4) : 1;
   const pct = t => `${+(Math.min(1, Math.max(0, t / C)) * 100).toFixed(3)}%`;
   const still = body => body.replace(/(-webkit-)?animation-timing-function\s*:[^;}]*;?/g, "");
   const remap = (name, b, delay, dur) => {
@@ -773,7 +781,7 @@ function applyLoop(doc, plays, pause) {
     st.textContent = text;
   }
   if (copies.length && styles[0]) styles[0].textContent += "\n" + copies.join("\n");
-  return { ok: true, timeline: T, total: plays * T + (plays - 1) * H };
+  return { ok: true, timeline: T, total: plays === Infinity ? Infinity : plays * T + (plays - 1) * H };
 }
 
 /* ------------------------------------------------------------- minify ---- */
@@ -860,8 +868,8 @@ ${svgMarkup}
 }
 
 /* ============================================================== pipeline == */
-// opts.plays: "auto" (as exported — an infinite loop is capped to fit the spec)
-// or 1–3; opts.pause: seconds the end frame holds between plays.
+// opts.plays: "auto" (as exported), a number of plays, or "forever"/Infinity;
+// opts.pause: seconds the end frame holds between plays.
 async function run(file, opts = {}) {
   const ctx = inspect(await file.text());
   const results = [];
@@ -877,7 +885,8 @@ async function run(file, opts = {}) {
 
   // Plays chosen by the person replace whatever looping the export had.
   if (opts.plays && opts.plays !== "auto") {
-    const plays = Math.max(1, Math.min(SPEC.maxLoops, Number(opts.plays) || 1));
+    const forever = opts.plays === "forever" || opts.plays === Infinity;
+    const plays = forever ? Infinity : Math.max(1, Math.min(SPEC.maxLoops, Number(opts.plays) || 1));
     const pause = plays > 1 ? Math.max(0, Number(opts.pause) || 0) : 0;
     const playsRule = { id: "plays", title: "Plays" };
     const loop = applyLoop(ctx.doc, plays, pause);
@@ -886,11 +895,16 @@ async function run(file, opts = {}) {
     } else {
       const i = results.findIndex(x => x.rule.id === "loop");
       if (i >= 0) results.splice(i, 1);   // superseded: the plays are now set explicitly
-      const what = plays === 1 ? "Plays once" : `${plays} plays${pause ? `, ${pause}s pause between` : ""}`;
-      results.push({ rule: playsRule, ...(loop.total > SPEC.maxAnimationSeconds + 1e-6
-        ? block(`${what}: ${loop.total.toFixed(1)}s in total, over the ${SPEC.maxAnimationSeconds}s limit.`,
-                `Choose fewer plays or a shorter pause. One play is ${loop.timeline.toFixed(1)}s.`)
-        : pass(`${what} — ${loop.total.toFixed(1)}s in total, ending on the last frame.`)) });
+      const gap = pause ? `, ${pause}s pause between` : "";
+      const what = forever ? `Loops forever${gap}` : plays === 1 ? "Plays once" : `${plays} plays${gap}`;
+      const pending = forever && !SPEC.holdOnLastFrame
+        ? pass(`${what} — ${loop.timeline.toFixed(1)}s per play.`)
+        : forever ? block(`${what}, but this spec needs the animation to stop.`, "Choose a number of plays.")
+        : loop.total > SPEC.maxTotalSeconds + 1e-6
+          ? block(`${what}: ${loop.total.toFixed(1)}s in total, over the ${SPEC.maxTotalSeconds}s limit.`,
+                  `Choose fewer plays or a shorter pause. One play is ${loop.timeline.toFixed(1)}s.`)
+          : pass(`${what} — ${loop.total.toFixed(1)}s in total, ending on the last frame.`);
+      results.push({ rule: playsRule, ...pending });
     }
   }
 
@@ -1132,8 +1146,8 @@ function render(out) {
   $("report").classList.remove("hidden");
 }
 
-// Plays and pause, read from the controls. "As exported" keeps the old
-// behaviour: an infinite loop is capped to fit the spec.
+// Plays and pause, read from the controls. "As exported" leaves the export's
+// own looping, capped only if the spec says the animation must stop.
 const loopOptions = () => ({ plays: $("plays").value, pause: parseFloat($("pause").value) || 0 });
 let lastFile = null;
 
@@ -1159,8 +1173,10 @@ async function handleFile(file) {
   }
 }
 
-$("specline").textContent =
-  `Spec: ≤${SPEC.maxZipKB} KB package, ≤${SPEC.maxAnimationSeconds}s animation over at most ${SPEC.maxLoops} plays, must stop on the last frame, JPG/PNG only, outlined text, no external calls.`;
+$("specline").textContent = `Spec: ≤${SPEC.maxZipKB} KB package, ≤${SPEC.maxAnimationSeconds}s per play, ` +
+  (isFinite(SPEC.maxLoops) ? `at most ${SPEC.maxLoops} plays${isFinite(SPEC.maxTotalSeconds) ? ` within ${SPEC.maxTotalSeconds}s` : ""}, ` : "") +
+  (SPEC.holdOnLastFrame ? "must stop on the last frame, " : "may loop forever, ") +
+  "JPG/PNG only, outlined text, no external calls.";
 
 const drop = $("drop");
 drop.addEventListener("click", () => $("file").click());
@@ -1176,11 +1192,13 @@ $("again").addEventListener("click", () => {
 });
 // Changing plays or the pause rebuilds the current file straight away.
 function loopChanged() {
-  const multi = Number($("plays").value) > 1;
+  const forever = $("plays").value === "forever";
+  const multi = forever || Number($("plays").value) > 1;
   $("pause").disabled = !multi;
   $("pause").closest("label").classList.toggle("hidden", !multi);   // only means something between plays
   $("loopnote").textContent = $("plays").value === "auto"
-    ? "Loops are kept as Figma exported them, capped to fit the spec."
+    ? (SPEC.holdOnLastFrame ? "Loops are kept as Figma exported them, capped to fit the spec." : "Loops are kept as Figma exported them.")
+    : forever ? "Replays forever. The end frame holds for the pause first. For a clean restart, fade everything out at the end of the timeline."
     : multi ? "The end frame holds for the pause, then the animation replays. The last play ends on the end frame."
             : "Plays once and holds the end frame.";
   if (lastFile) handleFile(lastFile);
@@ -1205,7 +1223,7 @@ $("dlZip").addEventListener("click", async () => {
  * lets you scrub the animation. Entirely separate from the convert pipeline
  * above; it reads what is in the file rather than rebuilding anything.
  * ========================================================================== */
-const BUILD = "2026-10-07";
+const BUILD = "2026-10-07b";
 $("build").textContent = "build " + BUILD;
 $("ispecline").textContent = $("specline").textContent;
 
@@ -1345,16 +1363,21 @@ function auditPackage(files, totalBytes, sourceLabel) {
   }
 
   if (!anim.count) add("info", "No animation found", "No CSS or SMIL animation — this ad is static.");
-  else if (anim.infinite) add("block", "Animation loops forever", "It never stops, which display specs don't allow. Rebuild it on the Convert tab.");
-  else {
+  else if (anim.infinite) {
+    if (SPEC.holdOnLastFrame) add("block", "Animation loops forever", "It never stops, which this spec doesn't allow. Rebuild it on the Convert tab.");
+    else add("pass", "Loops forever", "Allowed by this spec. Check each loop starts cleanly — fading everything out at the end of the timeline avoids a jump.");
+    anim.maxTotal <= SPEC.maxAnimationSeconds
+      ? add("pass", `One play is ${+anim.maxTotal.toFixed(2)}s`, `Within the ${SPEC.maxAnimationSeconds}s limit.`)
+      : add("block", `One play is ${+anim.maxTotal.toFixed(2)}s`, `Over the ${SPEC.maxAnimationSeconds}s limit for one play.`);
+  } else {
     // A fractional count means the last play stops early on its end frame.
     const plays = Math.ceil(anim.maxLoops - 1e-9);
     plays <= SPEC.maxLoops
-      ? add("pass", `Plays ${plays} time${plays === 1 ? "" : "s"}`, `At or under the ${SPEC.maxLoops}-play limit.`)
+      ? add("pass", `Plays ${plays} time${plays === 1 ? "" : "s"}`, isFinite(SPEC.maxLoops) ? `At or under the ${SPEC.maxLoops}-play limit.` : "No limit on plays.")
       : add("block", `Plays ${plays} times`, `Over the ${SPEC.maxLoops}-play limit. Rebuild it on the Convert tab, which caps this.`);
-    anim.maxTotal <= SPEC.maxAnimationSeconds
-      ? add("pass", `Runs ${+anim.maxTotal.toFixed(2)}s in total`, `Within the ${SPEC.maxAnimationSeconds}s limit.`)
-      : add("block", `Runs ${+anim.maxTotal.toFixed(2)}s in total`, `Over the ${SPEC.maxAnimationSeconds}s limit.`);
+    anim.maxTotal <= SPEC.maxTotalSeconds
+      ? add("pass", `Runs ${+anim.maxTotal.toFixed(2)}s in total`, isFinite(SPEC.maxTotalSeconds) ? `Within the ${SPEC.maxTotalSeconds}s limit.` : "No limit on total time.")
+      : add("block", `Runs ${+anim.maxTotal.toFixed(2)}s in total`, `Over the ${SPEC.maxTotalSeconds}s limit.`);
   }
 
   if (badFormats.length)

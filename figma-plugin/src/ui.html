@@ -1185,19 +1185,19 @@ function renderExport(msg) {
   // banners are packaged with it, so changing it means building again.
   const opts = el("div", "xopts");
   const plays = el("select");
-  for (const [v, t] of [["1", "Plays once"], ["2", "Plays twice"], ["3", "Plays 3 times"]]) { const o = el("option", null, t); o.value = v; plays.appendChild(o); }
-  plays.value = String(exportLoop.plays);
+  for (const [v, t] of [["1", "Plays once"], ["2", "Plays twice"], ["3", "Plays 3 times"], ["forever", "Loops forever"]]) { const o = el("option", null, t); o.value = v; plays.appendChild(o); }
+  plays.value = exportLoop.plays === Infinity ? "forever" : String(exportLoop.plays);
   const pause = el("input");
   pause.type = "number"; pause.min = 0; pause.max = 10; pause.step = 0.5; pause.value = exportLoop.pause; pause.style.width = "48px";
   const pauseLab = el("label");
   pauseLab.style.cssText = "display:flex;gap:4px;align-items:center;margin:0";
   pauseLab.appendChild(document.createTextNode("with a"));
   pauseLab.appendChild(pause);
-  pauseLab.appendChild(document.createTextNode("s pause on the end frame between plays"));
+  pauseLab.appendChild(el("span", null, "s pause on the end frame between plays"));
   // A pause only means something between plays.
   const sync = () => { pause.disabled = plays.value === "1"; pauseLab.classList.toggle("hidden", pause.disabled); };
   const changed = () => {
-    exportLoop = { plays: Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0) };
+    exportLoop = { plays: plays.value === "forever" ? Infinity : Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0) };
     sync();
     if (built.size) {
       built = new Map();
@@ -1265,7 +1265,7 @@ function statusText(b) {
   const warns = b.out.results.filter(r => r.status === "warn").length;   // motion notes are among these
   const first = b.out.results.find(r => r.status === "block");
   return blocks ? `✗ Not to spec — ${first.rule.title.toLowerCase()}: ${first.detail}` + (blocks > 1 ? ` (+${blocks - 1} more)` : "")
-    : `✓ Ready — ${Converter.kb(b.out.chosen.zipBytes)}, ${dur(b.duration)}` + (warns ? ` · ${warns} note${warns === 1 ? "" : "s"}` : "");
+    : `✓ Ready — ${Converter.kb(b.out.chosen.zipBytes)}, ${dur(b.duration)}${b.loops ? " a play, looping" : ""}` + (warns ? ` · ${warns} note${warns === 1 ? "" : "s"}` : "");
 }
 
 // A row's state while working: plain text in a neutral pill, no reason line.
@@ -1300,7 +1300,8 @@ function renderStatus(id, b) {
     }
     return;
   }
-  s.textContent = `${Converter.kb(b.out.chosen.zipBytes)} · ${dur(b.duration)}`; s.className = "pill ok";
+  s.textContent = `${Converter.kb(b.out.chosen.zipBytes)} · ${dur(b.duration)}${b.loops ? " ↻" : ""}`; s.className = "pill ok";
+  s.title = b.loops ? "Loops forever; the length shown is one play." : "";
   w.className = "why";
   if (notes.length) w.textContent = notes.map(n => n.detail).join(" ");
 }
@@ -1365,8 +1366,10 @@ async function buildOne(b) {
       presets: a.presets, trace: a.trace, animations: a.animations })),
     presetsOfferedToPlugins: payload.offered,
     svgKB: Math.round(payload.svg.length / 1024) }, null, 1);
-  const plays = exportLoop.plays, total = plays * anim.duration + (plays - 1) * (plays > 1 ? exportLoop.pause : 0);
-  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, onePlay: anim.duration, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
+  // A banner that loops forever has no total; its length is one play.
+  const plays = exportLoop.plays, loops = plays === Infinity;
+  const total = loops ? anim.duration : plays * anim.duration + (plays - 1) * (plays > 1 ? exportLoop.pause : 0);
+  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, onePlay: anim.duration, loops, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
 }
 
 async function buildAll() {
@@ -1471,7 +1474,9 @@ function showBanner(id) {
   row.appendChild(play); row.appendChild(end); row.appendChild(time);
   pv.appendChild(row);
   pv.appendChild(scrub);
-  pv.appendChild(el("div", "muted", "Check the end frame shows the call to action — the ad stops there."));
+  pv.appendChild(el("div", "muted", b.loops
+    ? "Loops forever; this plays one loop. Check the jump from the end back to the start looks clean — fading everything out at the end of the timeline avoids a jump."
+    : "Check the end frame shows the call to action — the ad stops there."));
   }
 
   const checks = el("details");
@@ -1608,7 +1613,7 @@ function renderGallery() {
     }
     tile.appendChild(box);
     const cap = el("div", "cap");
-    cap.appendChild(el("div", r.ok ? "ok" : "err", `${r.ok ? "✓" : "✗"} ${W}×${H}${r.ok ? ` · ${Converter.kb(r.out.chosen.zipBytes)} · ${dur(r.duration)}` : ""}`));
+    cap.appendChild(el("div", r.ok ? "ok" : "err", `${r.ok ? "✓" : "✗"} ${W}×${H}${r.ok ? ` · ${Converter.kb(r.out.chosen.zipBytes)} · ${dur(r.duration)}${r.loops ? " ↻" : ""}` : ""}`));
     // Many banners share a headline, so say which group each one is in too.
     const group = String(plan.where || "").split(" › ").pop();
     const headline = (r.payload && r.payload.headline) || "";
@@ -1639,7 +1644,7 @@ async function downloadAll() {
     // Everything worth knowing about a banner that passed: automatic size fixes
     // and motion that couldn't be carried across, both from its checks.
     const notes = b.out.results.filter(r => r.status === "warn" || r.status === "fixed").map(r => r.detail);
-    csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), n3(b.duration), notes.join(" | ")]);
+    csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), b.loops ? `${n3(b.duration)} per play, loops forever` : n3(b.duration), notes.join(" | ")]);
   }
   const esc = v => `"${String(v).replace(/"/g, '""')}"`;
   files.push({ name: "report.csv", data: new TextEncoder().encode(csv.map(r => r.map(esc).join(",")).join("\n")) });

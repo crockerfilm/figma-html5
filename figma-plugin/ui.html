@@ -2157,6 +2157,13 @@ async function buildAll() {
     go.textContent = `Building ${i + 1} of ${ids.length}…`;
     let r;
     try { r = await buildOne(b); } catch (e) { r = { picked: true, ok: false, error: String((e && e.message) || e), payload: { name: b.name, where: b.where, width: b.w, height: b.h } }; }
+    // Stopped part-way: that banner simply wasn't built — it isn't a failure.
+    if (uiStop && r.error) {
+      setStatus(id, "Not built");
+      const pill = document.getElementById(`xs-${id}`);
+      if (pill) pill.className = "pill";
+      break;
+    }
     built.set(id, r);
     renderStatus(id, r);
     const cb = out.querySelector(`input.xb[data-id="${id}"]`);

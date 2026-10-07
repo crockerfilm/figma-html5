@@ -346,6 +346,11 @@ Development → Import plugin from manifest → `figma-plugin/manifest.json`. Us
 - **Export, find every banner (2026-10-07):** optional tickbox that lists every frame named
   by its size (within 2px) on the page instead of using the selection; remembered via
   `figma.clientStorage`; grouped by parent frame with a tickbox per group.
+- **Fade before replay (2026-10-07):** `fadeBeforeLoop()` in the shared converter wraps each
+  outermost animated layer (not one holding a ≥90%-of-canvas image) in `<g class="cmfade">`
+  that fades out over the last F seconds of every cycle, after the pause; `applyLoop(doc,
+  plays, pause, fade)` makes the cycle T + pause + F. Export copies are tagged with plugin
+  data `copyMotion.exportCopy` and never listed; leftovers are reported.
 - **Sharing with the team:** zip `manifest.json`, `code.js`, `ui.html` and `README.md` from
   `figma-plugin/` into a folder called `Copy Motion` (the zip is attached to each GitHub
   release). Teammates import `manifest.json` once in the Figma desktop app; for an update

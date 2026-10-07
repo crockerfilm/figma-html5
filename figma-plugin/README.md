@@ -89,8 +89,17 @@ Click a banner for its full preview and spec checks.
 and are the same option as on the web tool: the end frame holds for the pause, then the
 animation replays. With a number of plays the last play ends on the end frame; with Loops
 forever it never stops (as the client's approved banner does), so fade everything out at the
-end of the timeline for a clean restart. One play must be 15 s or less; there's no limit on
-plays or total time. Changing them after building marks the banners to build again.
+end of the timeline for a clean restart — or tick **Fade animated layers out before each
+replay** and the export does it for you: after the pause, every animated layer fades out
+over the time you set (0.5 s by default), then the animation replays. Static layers and any
+animated layer holding a background-sized image don't fade; the last of a set number of
+plays ends on the end frame without fading. One play must be 15 s or less; there's no limit
+on plays or total time. Changing them after building marks the banners to build again.
+
+Each banner in the list has **Show**, to find it in Figma. Two banners the same size at
+exactly the same spot are flagged as a likely duplicate. Export works on a temporary copy;
+if Figma is closed mid-build and a copy is left behind, it is never listed as a banner, and
+the list says how many there are with a link to select them for deleting.
 
 The export works on a temporary copy placed on its own at the top of the page — components
 on the copy are detached and its animation cleared so it exports at rest — then deleted;

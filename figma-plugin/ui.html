@@ -618,7 +618,53 @@ function keyframeBlocks(text) {
   return out;
 }
 
-function applyLoop(doc, plays, pause) {
+// "Fade out before each replay": the outermost animated layers are each wrapped
+// in a group that fades to nothing over the last `fade` seconds of every cycle,
+// after the end-frame pause, so each replay starts clean. Static layers never
+// fade, and nor does an animated layer holding a near-full-size image (a
+// background) — its animated layers inside still do.
+function fadeBeforeLoop(doc, styles, C, start, count) {
+  const svg = doc.documentElement;
+  const W = parseFloat(svg.getAttribute("width")) || 0, H = parseFloat(svg.getAttribute("height")) || 0;
+  const animated = new Set();
+  for (const st of styles)
+    for (const m of st.textContent.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!/(^|;)\s*animation(-name)?\s*:/.test(m[2])) continue;
+      for (const sel of m[1].split(",")) {
+        try { doc.querySelectorAll(sel.trim()).forEach(e => animated.add(e)); } catch (e) { /* not a selector (a keyframe step) */ }
+      }
+    }
+  doc.querySelectorAll("[style]").forEach(e => { if (/animation(-name)?\s*:/.test(e.getAttribute("style") || "")) animated.add(e); });
+  const holdsImage = id => { const t = id && doc.getElementById(id); return !!t && (t.localName === "image" || !!t.querySelector("image, use")); };
+  const big = el => [el, ...el.querySelectorAll("image, rect, use")].some(c => {
+    const w = parseFloat(c.getAttribute("width")), h = parseFloat(c.getAttribute("height"));
+    if (!(W && H && w >= 0.9 * W && h >= 0.9 * H)) return false;
+    if (c.localName === "image") return true;
+    const ref = /url\(\s*['"]?#([^'")\s]+)/.exec(c.getAttribute("fill") || c.getAttribute("style") || "");
+    return holdsImage(ref && ref[1]) || (c.localName === "use" && holdsImage((c.getAttribute("href") || c.getAttribute("xlink:href") || "").slice(1)));
+  });
+  const chosen = [];
+  for (const el of doc.querySelectorAll("*")) {   // document order: ancestors first
+    if (!animated.has(el) || el === svg || el.closest("defs, clipPath, mask, pattern, symbol, marker")) continue;
+    if (chosen.some(c => c.contains(el)) || big(el)) continue;
+    chosen.push(el);
+  }
+  const NS = svg.namespaceURI || "http://www.w3.org/2000/svg";
+  for (const el of chosen) {
+    const g = doc.createElementNS(NS, "g");
+    g.setAttribute("class", "cmfade");
+    el.parentNode.insertBefore(g, el);
+    g.appendChild(el);
+  }
+  const pct = t => `${+(Math.min(1, Math.max(0, t / C)) * 100).toFixed(3)}%`;
+  let st = styles[0];
+  if (!st) { st = doc.createElementNS(NS, "style"); svg.insertBefore(st, svg.firstChild); }
+  st.textContent += `\n.cmfade{animation:cmfade ${+C.toFixed(4)}s linear 0s ${count} normal both}` +
+    `@keyframes cmfade{0%{opacity:1}${pct(start)}{opacity:1}100%{opacity:0}}`;
+  return chosen.length;
+}
+
+function applyLoop(doc, plays, pause, fade = 0) {
   const styles = [...doc.querySelectorAll("style")];
   const inline = [...doc.querySelectorAll("[style]")].filter(e => /animation\s*:/i.test(e.getAttribute("style") || ""));
   const declRe = /((?:^|[;{\s])animation\s*:\s*)([^;}]+)/g;
@@ -638,10 +684,12 @@ function applyLoop(doc, plays, pause) {
   for (const st of styles) for (const b of keyframeBlocks(st.textContent)) if (!blocks.has(b.name)) blocks.set(b.name, b);
   const T = Math.max(...uses.map(a => a.delay + a.duration));
   if (!(T > 0)) return { ok: false, reason: "the animation has no length" };
-  const H = plays > 1 ? Math.max(0, pause) : 0, C = T + H;
+  // Each cycle: the motion, the end frame held for the pause, then the fade.
+  const F = plays > 1 ? Math.max(0, fade) : 0;
+  const H = plays > 1 ? Math.max(0, pause) : 0, C = T + H + F;
   // Forever: every play is the whole cycle. Otherwise the last play stops as
-  // the motion ends (a fractional count), with no trailing pause.
-  const count = plays === Infinity ? "infinite" : plays > 1 ? +(plays - H / C).toFixed(4) : 1;
+  // the motion ends (a fractional count), with no trailing pause or fade.
+  const count = plays === Infinity ? "infinite" : plays > 1 ? +(plays - (H + F) / C).toFixed(4) : 1;
   const pct = t => `${+(Math.min(1, Math.max(0, t / C)) * 100).toFixed(3)}%`;
   const still = body => body.replace(/(-webkit-)?animation-timing-function\s*:[^;}]*;?/g, "");
   const remap = (name, b, delay, dur) => {
@@ -677,7 +725,8 @@ function applyLoop(doc, plays, pause) {
     st.textContent = text;
   }
   if (copies.length && styles[0]) styles[0].textContent += "\n" + copies.join("\n");
-  return { ok: true, timeline: T, total: plays === Infinity ? Infinity : plays * T + (plays - 1) * H };
+  const faded = F ? fadeBeforeLoop(doc, styles, C, T + H, count) : 0;
+  return { ok: true, timeline: T, faded, total: plays === Infinity ? Infinity : plays * T + (plays - 1) * (H + F) };
 }
 
 /* ------------------------------------------------------------- minify ---- */
@@ -785,13 +834,15 @@ async function run(file, opts = {}) {
     const plays = forever ? Infinity : Math.max(1, Math.min(SPEC.maxLoops, Number(opts.plays) || 1));
     const pause = plays > 1 ? Math.max(0, Number(opts.pause) || 0) : 0;
     const playsRule = { id: "plays", title: "Plays" };
-    const loop = applyLoop(ctx.doc, plays, pause);
+    const fade = plays > 1 ? Math.max(0, Number(opts.fade) || 0) : 0;
+    const loop = applyLoop(ctx.doc, plays, pause, fade);
     if (!loop.ok) {
       results.push({ rule: playsRule, ...warn(`The number of plays couldn't be set: ${loop.reason}. Left as exported.`, "") });
     } else {
       const i = results.findIndex(x => x.rule.id === "loop");
       if (i >= 0) results.splice(i, 1);   // superseded: the plays are now set explicitly
-      const gap = pause ? `, ${pause}s pause between` : "";
+      const gap = (pause ? `, ${pause}s pause between` : "") +
+        (fade ? `, ${loop.faded} animated layer${loop.faded === 1 ? "" : "s"} fading out over ${fade}s before each replay` : "");
       const what = forever ? `Loops forever${gap}` : plays === 1 ? "Plays once" : `${plays} plays${gap}`;
       const pending = forever && !SPEC.holdOnLastFrame
         ? pass(`${what} — ${loop.timeline.toFixed(1)}s per play.`)
@@ -1926,7 +1977,7 @@ function renderLayout(msg) {
 // and packages it with the web tool's own converter), then download them all
 // as one zip. Blocked banners are left out of the zip, as on the web tool.
 let exportPlan = [], built = new Map(), building = false, uiStop = false, previewId = null;
-let exportLoop = { plays: 1, pause: 0 };
+let exportLoop = { plays: 1, pause: 0, fade: 0 };
 const fixSizeFor = new Set();   // banners the person chose to export at their named size
 const waiting = new Map();   // banner id → resolver for its "exported" message
 
@@ -2037,6 +2088,15 @@ function renderExport(msg) {
   head.appendChild(pick);
   card.appendChild(head);
   card.appendChild(exportAllToggle());
+  // Copies an export left behind when it was cut short (Figma closed mid-build).
+  if (msg.leftovers && msg.leftovers.length) {
+    const w = el("div", "warn", `${msg.leftovers.length} cop${msg.leftovers.length === 1 ? "y" : "ies"} left on this page by an export that was cut short (Figma closed mid-build). They're not listed here; delete them in Figma. `);
+    const a = el("a", null, "Select them");
+    a.style.cssText = "color:var(--figma-color-text-brand);cursor:pointer";
+    a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "select", ids: msg.leftovers } }, "*"));
+    w.appendChild(a);
+    card.appendChild(w);
+  }
   if (msg.auto) {
     const n = el("div", "muted", "Only frames named by their size are found. To export one named otherwise, untick this and select it." +
       (msg.offSize ? ` ${msg.offSize} frame${msg.offSize === 1 ? " is" : "s are"} named by a size more than 2px off it (a scaled mockup, say) and left out.` : ""));
@@ -2057,10 +2117,26 @@ function renderExport(msg) {
   pauseLab.appendChild(document.createTextNode("with a"));
   pauseLab.appendChild(pause);
   pauseLab.appendChild(el("span", null, "s pause on the end frame between plays"));
-  // A pause only means something between plays.
-  const sync = () => { pause.disabled = plays.value === "1"; pauseLab.classList.toggle("hidden", pause.disabled); };
+  // Fade the animated layers out before each replay (never a background
+  // image), so every replay starts clean without fading them out in Figma.
+  const fadeLab = el("label");
+  fadeLab.style.cssText = "display:flex;gap:4px;align-items:center;margin:0";
+  const fadeOn = el("input"); fadeOn.type = "checkbox"; fadeOn.checked = exportLoop.fade > 0; fadeOn.style.margin = "0";
+  const fadeSecs = el("input");
+  fadeSecs.type = "number"; fadeSecs.min = 0.1; fadeSecs.max = 3; fadeSecs.step = 0.1; fadeSecs.value = exportLoop.fade || 0.5; fadeSecs.style.width = "44px";
+  fadeLab.appendChild(fadeOn);
+  fadeLab.appendChild(el("span", null, "Fade animated layers out before each replay, over"));
+  fadeLab.appendChild(fadeSecs);
+  fadeLab.appendChild(el("span", null, "s"));
+  // A pause or fade only means something between plays.
+  const sync = () => {
+    pause.disabled = plays.value === "1";
+    pauseLab.classList.toggle("hidden", pause.disabled);
+    fadeLab.classList.toggle("hidden", pause.disabled);
+  };
   const changed = () => {
-    exportLoop = { plays: plays.value === "forever" ? Infinity : Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0) };
+    exportLoop = { plays: plays.value === "forever" ? Infinity : Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0),
+                   fade: fadeOn.checked ? Math.max(0.1, parseFloat(fadeSecs.value) || 0.5) : 0 };
     sync();
     if (built.size) {
       built = new Map();
@@ -2072,8 +2148,11 @@ function renderExport(msg) {
   };
   plays.addEventListener("change", changed);
   pause.addEventListener("change", changed);
+  fadeOn.addEventListener("change", changed);
+  fadeSecs.addEventListener("change", changed);
   opts.appendChild(plays);
   opts.appendChild(pauseLab);
+  opts.appendChild(fadeLab);
   sync();
   card.appendChild(opts);
 
@@ -2094,6 +2173,11 @@ function renderExport(msg) {
     gh.appendChild(gcb);
     gh.appendChild(el("span", null, g.label));
     list.appendChild(gh);
+    // Two banners the same size at exactly the same spot in the same frame are
+    // almost always a duplicate sitting on top of the original.
+    const spot = b => `${b.w}x${b.h}@${b.x},${b.y}`;
+    const spots = new Map();
+    for (const b of g.items) if (b.x !== undefined) spots.set(spot(b), (spots.get(spot(b)) || 0) + 1);
     for (const b of g.items) {
       const row = el("div", "xrow");
       const cb = el("input", "xb"); cb.type = "checkbox"; cb.checked = b.animated > 0 && !b.hidden; cb.dataset.id = b.id; cb.dataset.group = gi;
@@ -2106,6 +2190,17 @@ function renderExport(msg) {
       if (!/^\d+\s*[x×]\s*\d+$/.test(b.name)) label.appendChild(el("span", "sub", b.name));
       if (!b.animated) label.appendChild(el("span", "sub", "· no animation"));
       if (b.hidden) label.appendChild(el("span", "sub", "· hidden"));
+      if (b.x !== undefined && spots.get(spot(b)) > 1) {
+        const dup = el("span", "sub", "· stacked exactly on another banner — a duplicate?");
+        dup.style.color = "var(--figma-color-text-warning)";
+        label.appendChild(dup);
+      }
+      // Find it in Figma — the size alone doesn't tell same-size banners apart.
+      const show = el("a", "sub", "Show");
+      show.title = "Show this banner in Figma";
+      show.style.cssText = "color:var(--figma-color-text-brand);cursor:pointer";
+      show.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: b.id } }, "*"));
+      label.appendChild(show);
       const pill = el("span", "pill", "Not built");
       pill.id = `xs-${b.id}`;
       const why = el("div", "why");
@@ -2231,8 +2326,11 @@ async function buildOne(b) {
     svgKB: Math.round(payload.svg.length / 1024) }, null, 1);
   // A banner that loops forever has no total; its length is one play.
   const plays = exportLoop.plays, loops = plays === Infinity;
-  const total = loops ? anim.duration : plays * anim.duration + (plays - 1) * (plays > 1 ? exportLoop.pause : 0);
-  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, onePlay: anim.duration, loops, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
+  const between = plays > 1 ? exportLoop.pause + exportLoop.fade : 0;
+  const total = loops ? anim.duration : plays * anim.duration + (plays - 1) * between;
+  // What a preview covers: a looping banner's whole cycle (play, pause, fade).
+  const span = loops ? anim.duration + exportLoop.pause + exportLoop.fade : total;
+  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, span, onePlay: anim.duration, loops, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
 }
 
 async function buildAll() {
@@ -2324,7 +2422,10 @@ function showBanner(id) {
   stage.appendChild(f);
   pv.appendChild(stage);
 
-  const D = b.duration * 1000;
+  const D = (b.span || b.duration) * 1000;
+  // A looping banner's end frame is the end of its motion, before any pause
+  // or fade; a moment before, if the next loop would start right there.
+  const endAt = b.loops ? Math.min(b.duration * 1000, D - 30) : D;
   const row = el("div", "btns"); row.style.marginTop = "8px";
   const play = el("button", "ghost", "Play");
   const end = el("button", "ghost", "End frame");
@@ -2335,10 +2436,10 @@ function showBanner(id) {
   const seek = ms => {
     const t = b.loops ? Math.min(ms, Math.max(0, D - 30)) : ms;
     f.contentWindow.postMessage({ cmd: "seek", t }, "*");
-    time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(b.duration)}`;
+    time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(D / 1000)}`;
   };
   play.addEventListener("click", () => f.contentWindow.postMessage({ cmd: "play" }, "*"));
-  end.addEventListener("click", () => { scrub.value = 1000; seek(D); });
+  end.addEventListener("click", () => { scrub.value = Math.round(1000 * endAt / D); seek(endAt); });
   scrub.addEventListener("input", () => seek(D * scrub.value / 1000));
   row.appendChild(play); row.appendChild(end); row.appendChild(time);
   pv.appendChild(row);
@@ -2418,7 +2519,7 @@ function renderGallery() {
   const items = galleryItems(), pages = Math.max(1, Math.ceil(items.length / PAGE));
   galleryPage = Math.min(galleryPage, pages - 1);
   const shown = items.slice(galleryPage * PAGE, galleryPage * PAGE + PAGE);
-  const longest = Math.max(0.05, ...shown.filter(i => i.r.ok).map(i => i.r.duration));
+  const longest = Math.max(0.05, ...shown.filter(i => i.r.ok).map(i => i.r.span || i.r.duration));
 
   const head = el("div", "ghead");
   const back = el("button", "ghost", "← Back");
@@ -2443,14 +2544,14 @@ function renderGallery() {
     // first frame; hold it just before.
     shown.forEach((i, k) => {
       if (!frames[k]) return;
-      const t = i.r.loops ? Math.min(ms, i.r.duration * 1000 - 30) : ms;
+      const t = i.r.loops ? Math.min(ms, (i.r.span || i.r.duration) * 1000 - 30) : ms;
       try { frames[k].contentWindow.postMessage({ cmd: "seek", t }, "*"); } catch (e) { /* not loaded yet */ }
     });
     time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(longest)}`;
   });
   ends.addEventListener("click", () => {
     // Each to its own end, since lengths can differ.
-    shown.forEach((i, k) => { if (frames[k] && i.r.ok) frames[k].contentWindow.postMessage({ cmd: "seek", t: i.r.duration * 1000 - (i.r.loops ? 30 : 0) }, "*"); });
+    shown.forEach((i, k) => { if (frames[k] && i.r.ok) frames[k].contentWindow.postMessage({ cmd: "seek", t: i.r.loops ? Math.min(i.r.duration * 1000, i.r.span * 1000 - 30) : i.r.duration * 1000 }, "*"); });
     scrub.value = 1000; time.textContent = "End frames";
   });
   head.appendChild(back); head.appendChild(filter); head.appendChild(play); head.appendChild(ends); head.appendChild(scrub); head.appendChild(time);

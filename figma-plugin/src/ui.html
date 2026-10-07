@@ -1063,7 +1063,7 @@ function renderLayout(msg) {
 // and packages it with the web tool's own converter), then download them all
 // as one zip. Blocked banners are left out of the zip, as on the web tool.
 let exportPlan = [], built = new Map(), building = false, uiStop = false, previewId = null;
-let exportLoop = { plays: 1, pause: 0 };
+let exportLoop = { plays: 1, pause: 0, fade: 0 };
 const fixSizeFor = new Set();   // banners the person chose to export at their named size
 const waiting = new Map();   // banner id → resolver for its "exported" message
 
@@ -1174,6 +1174,15 @@ function renderExport(msg) {
   head.appendChild(pick);
   card.appendChild(head);
   card.appendChild(exportAllToggle());
+  // Copies an export left behind when it was cut short (Figma closed mid-build).
+  if (msg.leftovers && msg.leftovers.length) {
+    const w = el("div", "warn", `${msg.leftovers.length} cop${msg.leftovers.length === 1 ? "y" : "ies"} left on this page by an export that was cut short (Figma closed mid-build). They're not listed here; delete them in Figma. `);
+    const a = el("a", null, "Select them");
+    a.style.cssText = "color:var(--figma-color-text-brand);cursor:pointer";
+    a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "select", ids: msg.leftovers } }, "*"));
+    w.appendChild(a);
+    card.appendChild(w);
+  }
   if (msg.auto) {
     const n = el("div", "muted", "Only frames named by their size are found. To export one named otherwise, untick this and select it." +
       (msg.offSize ? ` ${msg.offSize} frame${msg.offSize === 1 ? " is" : "s are"} named by a size more than 2px off it (a scaled mockup, say) and left out.` : ""));
@@ -1194,10 +1203,26 @@ function renderExport(msg) {
   pauseLab.appendChild(document.createTextNode("with a"));
   pauseLab.appendChild(pause);
   pauseLab.appendChild(el("span", null, "s pause on the end frame between plays"));
-  // A pause only means something between plays.
-  const sync = () => { pause.disabled = plays.value === "1"; pauseLab.classList.toggle("hidden", pause.disabled); };
+  // Fade the animated layers out before each replay (never a background
+  // image), so every replay starts clean without fading them out in Figma.
+  const fadeLab = el("label");
+  fadeLab.style.cssText = "display:flex;gap:4px;align-items:center;margin:0";
+  const fadeOn = el("input"); fadeOn.type = "checkbox"; fadeOn.checked = exportLoop.fade > 0; fadeOn.style.margin = "0";
+  const fadeSecs = el("input");
+  fadeSecs.type = "number"; fadeSecs.min = 0.1; fadeSecs.max = 3; fadeSecs.step = 0.1; fadeSecs.value = exportLoop.fade || 0.5; fadeSecs.style.width = "44px";
+  fadeLab.appendChild(fadeOn);
+  fadeLab.appendChild(el("span", null, "Fade animated layers out before each replay, over"));
+  fadeLab.appendChild(fadeSecs);
+  fadeLab.appendChild(el("span", null, "s"));
+  // A pause or fade only means something between plays.
+  const sync = () => {
+    pause.disabled = plays.value === "1";
+    pauseLab.classList.toggle("hidden", pause.disabled);
+    fadeLab.classList.toggle("hidden", pause.disabled);
+  };
   const changed = () => {
-    exportLoop = { plays: plays.value === "forever" ? Infinity : Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0) };
+    exportLoop = { plays: plays.value === "forever" ? Infinity : Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0),
+                   fade: fadeOn.checked ? Math.max(0.1, parseFloat(fadeSecs.value) || 0.5) : 0 };
     sync();
     if (built.size) {
       built = new Map();
@@ -1209,8 +1234,11 @@ function renderExport(msg) {
   };
   plays.addEventListener("change", changed);
   pause.addEventListener("change", changed);
+  fadeOn.addEventListener("change", changed);
+  fadeSecs.addEventListener("change", changed);
   opts.appendChild(plays);
   opts.appendChild(pauseLab);
+  opts.appendChild(fadeLab);
   sync();
   card.appendChild(opts);
 
@@ -1231,6 +1259,11 @@ function renderExport(msg) {
     gh.appendChild(gcb);
     gh.appendChild(el("span", null, g.label));
     list.appendChild(gh);
+    // Two banners the same size at exactly the same spot in the same frame are
+    // almost always a duplicate sitting on top of the original.
+    const spot = b => `${b.w}x${b.h}@${b.x},${b.y}`;
+    const spots = new Map();
+    for (const b of g.items) if (b.x !== undefined) spots.set(spot(b), (spots.get(spot(b)) || 0) + 1);
     for (const b of g.items) {
       const row = el("div", "xrow");
       const cb = el("input", "xb"); cb.type = "checkbox"; cb.checked = b.animated > 0 && !b.hidden; cb.dataset.id = b.id; cb.dataset.group = gi;
@@ -1243,6 +1276,17 @@ function renderExport(msg) {
       if (!/^\d+\s*[x×]\s*\d+$/.test(b.name)) label.appendChild(el("span", "sub", b.name));
       if (!b.animated) label.appendChild(el("span", "sub", "· no animation"));
       if (b.hidden) label.appendChild(el("span", "sub", "· hidden"));
+      if (b.x !== undefined && spots.get(spot(b)) > 1) {
+        const dup = el("span", "sub", "· stacked exactly on another banner — a duplicate?");
+        dup.style.color = "var(--figma-color-text-warning)";
+        label.appendChild(dup);
+      }
+      // Find it in Figma — the size alone doesn't tell same-size banners apart.
+      const show = el("a", "sub", "Show");
+      show.title = "Show this banner in Figma";
+      show.style.cssText = "color:var(--figma-color-text-brand);cursor:pointer";
+      show.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: b.id } }, "*"));
+      label.appendChild(show);
       const pill = el("span", "pill", "Not built");
       pill.id = `xs-${b.id}`;
       const why = el("div", "why");
@@ -1368,8 +1412,11 @@ async function buildOne(b) {
     svgKB: Math.round(payload.svg.length / 1024) }, null, 1);
   // A banner that loops forever has no total; its length is one play.
   const plays = exportLoop.plays, loops = plays === Infinity;
-  const total = loops ? anim.duration : plays * anim.duration + (plays - 1) * (plays > 1 ? exportLoop.pause : 0);
-  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, onePlay: anim.duration, loops, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
+  const between = plays > 1 ? exportLoop.pause + exportLoop.fade : 0;
+  const total = loops ? anim.duration : plays * anim.duration + (plays - 1) * between;
+  // What a preview covers: a looping banner's whole cycle (play, pause, fade).
+  const span = loops ? anim.duration + exportLoop.pause + exportLoop.fade : total;
+  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, span, onePlay: anim.duration, loops, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
 }
 
 async function buildAll() {
@@ -1461,7 +1508,10 @@ function showBanner(id) {
   stage.appendChild(f);
   pv.appendChild(stage);
 
-  const D = b.duration * 1000;
+  const D = (b.span || b.duration) * 1000;
+  // A looping banner's end frame is the end of its motion, before any pause
+  // or fade; a moment before, if the next loop would start right there.
+  const endAt = b.loops ? Math.min(b.duration * 1000, D - 30) : D;
   const row = el("div", "btns"); row.style.marginTop = "8px";
   const play = el("button", "ghost", "Play");
   const end = el("button", "ghost", "End frame");
@@ -1472,10 +1522,10 @@ function showBanner(id) {
   const seek = ms => {
     const t = b.loops ? Math.min(ms, Math.max(0, D - 30)) : ms;
     f.contentWindow.postMessage({ cmd: "seek", t }, "*");
-    time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(b.duration)}`;
+    time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(D / 1000)}`;
   };
   play.addEventListener("click", () => f.contentWindow.postMessage({ cmd: "play" }, "*"));
-  end.addEventListener("click", () => { scrub.value = 1000; seek(D); });
+  end.addEventListener("click", () => { scrub.value = Math.round(1000 * endAt / D); seek(endAt); });
   scrub.addEventListener("input", () => seek(D * scrub.value / 1000));
   row.appendChild(play); row.appendChild(end); row.appendChild(time);
   pv.appendChild(row);
@@ -1555,7 +1605,7 @@ function renderGallery() {
   const items = galleryItems(), pages = Math.max(1, Math.ceil(items.length / PAGE));
   galleryPage = Math.min(galleryPage, pages - 1);
   const shown = items.slice(galleryPage * PAGE, galleryPage * PAGE + PAGE);
-  const longest = Math.max(0.05, ...shown.filter(i => i.r.ok).map(i => i.r.duration));
+  const longest = Math.max(0.05, ...shown.filter(i => i.r.ok).map(i => i.r.span || i.r.duration));
 
   const head = el("div", "ghead");
   const back = el("button", "ghost", "← Back");
@@ -1580,14 +1630,14 @@ function renderGallery() {
     // first frame; hold it just before.
     shown.forEach((i, k) => {
       if (!frames[k]) return;
-      const t = i.r.loops ? Math.min(ms, i.r.duration * 1000 - 30) : ms;
+      const t = i.r.loops ? Math.min(ms, (i.r.span || i.r.duration) * 1000 - 30) : ms;
       try { frames[k].contentWindow.postMessage({ cmd: "seek", t }, "*"); } catch (e) { /* not loaded yet */ }
     });
     time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(longest)}`;
   });
   ends.addEventListener("click", () => {
     // Each to its own end, since lengths can differ.
-    shown.forEach((i, k) => { if (frames[k] && i.r.ok) frames[k].contentWindow.postMessage({ cmd: "seek", t: i.r.duration * 1000 - (i.r.loops ? 30 : 0) }, "*"); });
+    shown.forEach((i, k) => { if (frames[k] && i.r.ok) frames[k].contentWindow.postMessage({ cmd: "seek", t: i.r.loops ? Math.min(i.r.duration * 1000, i.r.span * 1000 - 30) : i.r.duration * 1000 }, "*"); });
     scrub.value = 1000; time.textContent = "End frames";
   });
   head.appendChild(back); head.appendChild(filter); head.appendChild(play); head.appendChild(ends); head.appendChild(scrub); head.appendChild(time);

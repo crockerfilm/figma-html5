@@ -74,6 +74,7 @@
     border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 13px; }
   .loopopts input { width: 64px; }
   .loopopts input:disabled { opacity: .4; }
+  .loopopts input[type=checkbox] { width: auto; padding: 0; }
 
   .tabs { display: flex; gap: 6px; align-items: center; border-bottom: 1px solid var(--line);
     margin: 18px 0 22px; }
@@ -127,6 +128,9 @@
       </label>
       <label>Pause between plays
         <input type="number" id="pause" min="0" max="10" step="0.5" value="0" disabled> s
+      </label>
+      <label><input type="checkbox" id="fadeloop"> Fade animated layers out before each replay, over
+        <input type="number" id="fadesecs" min="0.1" max="3" step="0.1" value="0.5"> s
       </label>
       <span class="specline" id="loopnote" style="margin:0"></span>
     </div>
@@ -722,7 +726,53 @@ function keyframeBlocks(text) {
   return out;
 }
 
-function applyLoop(doc, plays, pause) {
+// "Fade out before each replay": the outermost animated layers are each wrapped
+// in a group that fades to nothing over the last `fade` seconds of every cycle,
+// after the end-frame pause, so each replay starts clean. Static layers never
+// fade, and nor does an animated layer holding a near-full-size image (a
+// background) — its animated layers inside still do.
+function fadeBeforeLoop(doc, styles, C, start, count) {
+  const svg = doc.documentElement;
+  const W = parseFloat(svg.getAttribute("width")) || 0, H = parseFloat(svg.getAttribute("height")) || 0;
+  const animated = new Set();
+  for (const st of styles)
+    for (const m of st.textContent.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!/(^|;)\s*animation(-name)?\s*:/.test(m[2])) continue;
+      for (const sel of m[1].split(",")) {
+        try { doc.querySelectorAll(sel.trim()).forEach(e => animated.add(e)); } catch (e) { /* not a selector (a keyframe step) */ }
+      }
+    }
+  doc.querySelectorAll("[style]").forEach(e => { if (/animation(-name)?\s*:/.test(e.getAttribute("style") || "")) animated.add(e); });
+  const holdsImage = id => { const t = id && doc.getElementById(id); return !!t && (t.localName === "image" || !!t.querySelector("image, use")); };
+  const big = el => [el, ...el.querySelectorAll("image, rect, use")].some(c => {
+    const w = parseFloat(c.getAttribute("width")), h = parseFloat(c.getAttribute("height"));
+    if (!(W && H && w >= 0.9 * W && h >= 0.9 * H)) return false;
+    if (c.localName === "image") return true;
+    const ref = /url\(\s*['"]?#([^'")\s]+)/.exec(c.getAttribute("fill") || c.getAttribute("style") || "");
+    return holdsImage(ref && ref[1]) || (c.localName === "use" && holdsImage((c.getAttribute("href") || c.getAttribute("xlink:href") || "").slice(1)));
+  });
+  const chosen = [];
+  for (const el of doc.querySelectorAll("*")) {   // document order: ancestors first
+    if (!animated.has(el) || el === svg || el.closest("defs, clipPath, mask, pattern, symbol, marker")) continue;
+    if (chosen.some(c => c.contains(el)) || big(el)) continue;
+    chosen.push(el);
+  }
+  const NS = svg.namespaceURI || "http://www.w3.org/2000/svg";
+  for (const el of chosen) {
+    const g = doc.createElementNS(NS, "g");
+    g.setAttribute("class", "cmfade");
+    el.parentNode.insertBefore(g, el);
+    g.appendChild(el);
+  }
+  const pct = t => `${+(Math.min(1, Math.max(0, t / C)) * 100).toFixed(3)}%`;
+  let st = styles[0];
+  if (!st) { st = doc.createElementNS(NS, "style"); svg.insertBefore(st, svg.firstChild); }
+  st.textContent += `\n.cmfade{animation:cmfade ${+C.toFixed(4)}s linear 0s ${count} normal both}` +
+    `@keyframes cmfade{0%{opacity:1}${pct(start)}{opacity:1}100%{opacity:0}}`;
+  return chosen.length;
+}
+
+function applyLoop(doc, plays, pause, fade = 0) {
   const styles = [...doc.querySelectorAll("style")];
   const inline = [...doc.querySelectorAll("[style]")].filter(e => /animation\s*:/i.test(e.getAttribute("style") || ""));
   const declRe = /((?:^|[;{\s])animation\s*:\s*)([^;}]+)/g;
@@ -742,10 +792,12 @@ function applyLoop(doc, plays, pause) {
   for (const st of styles) for (const b of keyframeBlocks(st.textContent)) if (!blocks.has(b.name)) blocks.set(b.name, b);
   const T = Math.max(...uses.map(a => a.delay + a.duration));
   if (!(T > 0)) return { ok: false, reason: "the animation has no length" };
-  const H = plays > 1 ? Math.max(0, pause) : 0, C = T + H;
+  // Each cycle: the motion, the end frame held for the pause, then the fade.
+  const F = plays > 1 ? Math.max(0, fade) : 0;
+  const H = plays > 1 ? Math.max(0, pause) : 0, C = T + H + F;
   // Forever: every play is the whole cycle. Otherwise the last play stops as
-  // the motion ends (a fractional count), with no trailing pause.
-  const count = plays === Infinity ? "infinite" : plays > 1 ? +(plays - H / C).toFixed(4) : 1;
+  // the motion ends (a fractional count), with no trailing pause or fade.
+  const count = plays === Infinity ? "infinite" : plays > 1 ? +(plays - (H + F) / C).toFixed(4) : 1;
   const pct = t => `${+(Math.min(1, Math.max(0, t / C)) * 100).toFixed(3)}%`;
   const still = body => body.replace(/(-webkit-)?animation-timing-function\s*:[^;}]*;?/g, "");
   const remap = (name, b, delay, dur) => {
@@ -781,7 +833,8 @@ function applyLoop(doc, plays, pause) {
     st.textContent = text;
   }
   if (copies.length && styles[0]) styles[0].textContent += "\n" + copies.join("\n");
-  return { ok: true, timeline: T, total: plays === Infinity ? Infinity : plays * T + (plays - 1) * H };
+  const faded = F ? fadeBeforeLoop(doc, styles, C, T + H, count) : 0;
+  return { ok: true, timeline: T, faded, total: plays === Infinity ? Infinity : plays * T + (plays - 1) * (H + F) };
 }
 
 /* ------------------------------------------------------------- minify ---- */
@@ -889,13 +942,15 @@ async function run(file, opts = {}) {
     const plays = forever ? Infinity : Math.max(1, Math.min(SPEC.maxLoops, Number(opts.plays) || 1));
     const pause = plays > 1 ? Math.max(0, Number(opts.pause) || 0) : 0;
     const playsRule = { id: "plays", title: "Plays" };
-    const loop = applyLoop(ctx.doc, plays, pause);
+    const fade = plays > 1 ? Math.max(0, Number(opts.fade) || 0) : 0;
+    const loop = applyLoop(ctx.doc, plays, pause, fade);
     if (!loop.ok) {
       results.push({ rule: playsRule, ...warn(`The number of plays couldn't be set: ${loop.reason}. Left as exported.`, "") });
     } else {
       const i = results.findIndex(x => x.rule.id === "loop");
       if (i >= 0) results.splice(i, 1);   // superseded: the plays are now set explicitly
-      const gap = pause ? `, ${pause}s pause between` : "";
+      const gap = (pause ? `, ${pause}s pause between` : "") +
+        (fade ? `, ${loop.faded} animated layer${loop.faded === 1 ? "" : "s"} fading out over ${fade}s before each replay` : "");
       const what = forever ? `Loops forever${gap}` : plays === 1 ? "Plays once" : `${plays} plays${gap}`;
       const pending = forever && !SPEC.holdOnLastFrame
         ? pass(`${what} — ${loop.timeline.toFixed(1)}s per play.`)
@@ -1148,7 +1203,8 @@ function render(out) {
 
 // Plays and pause, read from the controls. "As exported" leaves the export's
 // own looping, capped only if the spec says the animation must stop.
-const loopOptions = () => ({ plays: $("plays").value, pause: parseFloat($("pause").value) || 0 });
+const loopOptions = () => ({ plays: $("plays").value, pause: parseFloat($("pause").value) || 0,
+                             fade: $("fadeloop").checked ? Math.max(0.1, parseFloat($("fadesecs").value) || 0.5) : 0 });
 let lastFile = null;
 
 async function handleFile(file) {
@@ -1196,6 +1252,7 @@ function loopChanged() {
   const multi = forever || Number($("plays").value) > 1;
   $("pause").disabled = !multi;
   $("pause").closest("label").classList.toggle("hidden", !multi);   // only means something between plays
+  $("fadeloop").closest("label").classList.toggle("hidden", !multi);
   $("loopnote").textContent = $("plays").value === "auto"
     ? (SPEC.holdOnLastFrame ? "Loops are kept as Figma exported them, capped to fit the spec." : "Loops are kept as Figma exported them.")
     : forever ? "Replays forever. The end frame holds for the pause first. For a clean restart, fade everything out at the end of the timeline."
@@ -1205,6 +1262,8 @@ function loopChanged() {
 }
 $("plays").addEventListener("change", loopChanged);
 $("pause").addEventListener("change", loopChanged);
+$("fadeloop").addEventListener("change", loopChanged);
+$("fadesecs").addEventListener("change", loopChanged);
 loopChanged();
 $("dlZip").addEventListener("click", async () => {
   if (!built || !built.chosen) return;
@@ -1223,7 +1282,7 @@ $("dlZip").addEventListener("click", async () => {
  * lets you scrub the animation. Entirely separate from the convert pipeline
  * above; it reads what is in the file rather than rebuilding anything.
  * ========================================================================== */
-const BUILD = "2026-10-07c";
+const BUILD = "2026-10-07d";
 $("build").textContent = "build " + BUILD;
 $("ispecline").textContent = $("specline").textContent;
 

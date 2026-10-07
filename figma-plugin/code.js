@@ -1309,7 +1309,7 @@ const animatedInside = n => hasMotion(n) || ("findOne" in n && !!n.findOne(hasMo
 // frame directly inside it, looking through nested boards.
 function bannersIn(sel) {
   const out = [], seen = new Set();
-  const add = n => { if (!seen.has(n.id)) { seen.add(n.id); out.push(n); } };
+  const add = n => { if (!seen.has(n.id) && !isExportCopy(n)) { seen.add(n.id); out.push(n); } };
   const walk = n => {
     if (isBoard(n) && "children" in n) {
       for (const c of n.children) {
@@ -1327,6 +1327,10 @@ function bannersIn(sel) {
 // another, or a frame inside a component, isn't a banner of its own. The
 // choice is remembered on this computer.
 let exportAll = false;
+const EXPORT_COPY = "copyMotion.exportCopy";
+const isExportCopy = n => { try { return !!n.getPluginData(EXPORT_COPY); } catch (e) { return false; } };
+// Copies left on the page by an export that was cut short.
+const leftoverCopies = () => figma.currentPage.children.filter(isExportCopy).map(n => n.id);
 const SIZE_NAME = /^\s*(\d{2,4})\s*[x×X]\s*(\d{2,4})\s*$/;
 async function scanExportPage(seq) {
   const page = await walkPage(seq, "Looking for banners on this page");
@@ -1338,7 +1342,7 @@ async function scanExportPage(seq) {
     const n = page.list[i];
     if (n.type !== "FRAME" && n.type !== "COMPONENT" && n.type !== "INSTANCE") continue;
     const m = SIZE_NAME.exec(n.name);
-    if (!m || page.inst(n)) continue;
+    if (!m || page.inst(n) || isExportCopy(n)) continue;
     let nested = false;
     for (const a of page.ancestors(n)) if (ids.has(a)) { nested = true; break; }
     if (nested) continue;
@@ -1354,11 +1358,12 @@ async function scanExportPage(seq) {
   for (const [i, b] of found.entries()) {
     if (i % 10 === 0) { await pause(`Reading banner ${i + 1} of ${found.length}`); if (stale(seq)) return; }
     const up = page.ancestors(b).next().value || "";   // the frame it sits in, which groups it
-    list.push({ id: b.id, name: b.name, where: where(b), group: up, w: Math.round(b.width), h: Math.round(b.height), hidden: !page.shown(b),
+    list.push({ id: b.id, name: b.name, where: where(b), group: up, x: Math.round(b.x), y: Math.round(b.y),
+                w: Math.round(b.width), h: Math.round(b.height), hidden: !page.shown(b),
                 animated: (hasMotion(b) ? 1 : 0) + b.findAll(hasMotion).length });
   }
   if (stale(seq)) return;
-  post({ type: "plan", mode, auto: true, offSize, banners: list });
+  post({ type: "plan", mode, auto: true, offSize, banners: list, leftovers: leftoverCopies() });
 }
 
 async function scanExport(seq, sel) {
@@ -1371,11 +1376,12 @@ async function scanExport(seq, sel) {
     if (i % 10 === 0) { await pause(`Reading banner ${i + 1} of ${banners.length}`); if (stale(seq)) return; }
     let up = "";
     try { up = b.parent ? b.parent.id : ""; } catch (e) { /* grouped by name instead */ }
-    list.push({ id: b.id, name: b.name, where: where(b), group: up, w: Math.round(b.width), h: Math.round(b.height),
+    list.push({ id: b.id, name: b.name, where: where(b), group: up, x: Math.round(b.x), y: Math.round(b.y),
+                w: Math.round(b.width), h: Math.round(b.height),
                 animated: (hasMotion(b) ? 1 : 0) + b.findAll(hasMotion).length });
   }
   if (stale(seq)) return;
-  post({ type: "plan", mode, banners: list });
+  post({ type: "plan", mode, banners: list, leftovers: leftoverCopies() });
 }
 
 // Easing can be a motion variable; the panel can't read variables, so resolve
@@ -1446,6 +1452,9 @@ async function exportBanner(id, fixSize) {
     const notes = [];
 
     copy = b.clone();
+    // Marked, so if an export is ever cut short (Figma closed mid-build) the
+    // copy left behind is never listed as a banner, and can be found.
+    copy.setPluginData(EXPORT_COPY, "1");
     figma.currentPage.appendChild(copy);
     // Detach every component on the copy (outermost first, repeatedly, since
     // detaching exposes nested ones) so inherited animation can be cleared.

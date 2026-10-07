@@ -11,7 +11,8 @@ page that shows the same thing. Layers are matched by what they show, not by the
 | Anything else | Same layer name, flagged in the preview so you can check it |
 
 Copying **replaces** the animation already on each target, so after client feedback you
-fix the hero banner and run it again. One ⌘Z undoes a whole run. Hidden layers are listed
+fix the hero banner and run it again. Every run saves a restore point first, so it can be
+undone (see Safety net). Hidden layers are listed
 but left unticked. The selected hero is never changed, and a layer is skipped when its
 parent already receives the same animation, so nested same-named frames don't double up.
 

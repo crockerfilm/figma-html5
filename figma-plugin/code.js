@@ -1126,7 +1126,7 @@ async function apply(targets, label) {
       const styles = src.animationStyles.map(a => Object.assign({}, a, { resolved: resolveStyleId(a) }));
       const stuck = styles.filter(a => !a.resolved);
       if (stuck.length) {
-        failed.push({ where: src.name, error: `skipped — “${stuck[0].name}” is a built-in preset a plugin can't re-apply`, count: targets[sid].length });
+        failed.push({ where: src.name, error: `skipped — “${styleName(stuck[0])}” is a built-in preset a plugin can't re-apply`, count: targets[sid].length });
         continue;
       }
       const tracks = manualFields(src);

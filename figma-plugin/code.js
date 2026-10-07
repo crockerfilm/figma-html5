@@ -174,9 +174,18 @@ function safeName(n) { try { return n.name; } catch (e) { return "(deleted layer
 // inside an instance after that instance changes.
 function gone(n) { try { return !n || n.removed; } catch (e) { return true; } }
 
+// Figma's built-in presets come through with internal names such as
+// "motion.preset_name.opacity"; show them the way a person would say them.
+function styleName(s) {
+  const m = /^motion\.preset_name\.(.+)$/.exec(String((s && s.name) || ""));
+  if (!m) return (s && s.name) || "Animation";
+  const words = m[1].replace(/[_.]+/g, " ").trim();
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)} (Figma preset)`;
+}
+
 function describe(n) {
   const lines = n.animationStyles.map(s =>
-    `${s.name} — starts ${secs(s.timelineOffset)}` +
+    `${styleName(s)} — starts ${secs(s.timelineOffset)}` +
     (s.type !== "CUSTOM" && s.duration != null ? `, lasts ${secs(s.duration)}` : ""));
   const manual = manualFields(n);
   for (const m of manual) lines.push(`${m.label} — ${m.binding.keyframes.length} hand-placed keyframes`);
@@ -282,9 +291,9 @@ async function animatedOutside(sel, seq) {
 }
 
 function presetProblem(n) {
-  const stuck = n.animationStyles.filter(a => !resolveStyleId(a)).map(a => a.name);
+  const stuck = n.animationStyles.filter(a => !resolveStyleId(a)).map(styleName);
   if (!stuck.length) return "";
-  const offered = figma.motion.figmaAnimationStyles().map(a => a.name).slice(0, 12).join(", ");
+  const offered = figma.motion.figmaAnimationStyles().map(styleName).slice(0, 12).join(", ");
   return `“${stuck.join("”, “")}” is one of Figma's built-in presets, and Figma won't let a plugin re-apply it. ` +
     `Save this layer's animation as your own animation style (the way the headlines are done) and run this again.` +
     (offered ? ` (Presets Figma offers plugins: ${offered}.)` : "");
@@ -1120,7 +1129,7 @@ async function apply(targets, label) {
         const t = await figma.getNodeByIdAsync(tid);
         if (gone(t)) { failed.push({ where: tid, error: "layer no longer exists" }); continue; }
         await pause(`Copying ${done + failed.length + 1} of ${total.toLocaleString()} — ${where(t)} › ${t.name}`);
-        const before = t.animationStyles.map(a => `${a.name} (${a.type === "CUSTOM" ? "saved style" : "preset"})`);
+        const before = t.animationStyles.map(a => a.type === "CUSTOM" ? `${a.name} (saved style)` : styleName(a));
         try {
           protect(run, t);
         } catch (e) {

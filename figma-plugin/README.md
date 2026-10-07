@@ -104,7 +104,7 @@ The checks come from `../index.html` (between `@converter:start` and `@converter
 
 - **Restore points:** every run that changes animation (copy, remove, or going back) saves
   each layer's animation onto that layer before touching it, and a Figma version too.
-  *Browse restore points* in the footer lists them newest first. **Go back to before this**
+  *Browse* in the footer lists them newest first. **Go back to before this**
   works on any point, not only the latest: every layer that run, or anything after it,
   changed is put back to how it was just before it ran, after a review showing the count.
   Going back is itself a restore point, so it can be undone. **Show layers** selects what a
@@ -114,7 +114,7 @@ The checks come from `../index.html` (between `@converter:start` and `@converter
 - **Stop** halts a run part-way; its restore point covers what it already did.
 - The plugin only ever changes animation. It never deletes, moves or edits layers.
 
-**Remove animation from others** opens a review first: every animated layer in your
+**Remove other animation…** (removes animation from everything except your selection) opens a review first: every animated layer in your
 selection that will be **kept** (with its animation and a Show link), and what will be
 **removed** (the total, by layer name and by top-level frame). Nothing changes until you
 confirm in that card. If the selection has no animation, the card warns that the whole page

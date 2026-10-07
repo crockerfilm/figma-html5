@@ -11,6 +11,7 @@
   .muted { color: var(--figma-color-text-secondary); }
   .card { border: 1px solid var(--figma-color-border); border-radius: 6px; padding: 10px; margin-top: 10px; }
   .card b { font-weight: 600; }
+  .dismiss { float: right; margin-left: 8px; cursor: pointer; color: var(--figma-color-text-secondary); }
   .anim { margin: 6px 0 0; padding-left: 16px; }
   .warn { color: var(--figma-color-text-warning); margin-top: 6px; }
   .note { color: var(--figma-color-text-secondary); margin-top: 6px; font-style: italic; }
@@ -80,19 +81,18 @@
     <button data-mode="export">Export</button>
   </div>
   <div class="muted" id="modeHelp"></div>
-  <div id="out"></div>
   <div id="result"></div>
+  <div id="out"></div>
 </div>
 <div class="foot">
   <div class="status" id="status">Ready</div>
   <div class="btns">
     <button id="go" disabled>Copy animation</button>
     <button id="stop" class="danger hidden">Stop</button>
-    <button id="clear" class="ghost" disabled>Remove animation from others</button>
+    <button id="clear" class="ghost" disabled>Remove other animation…</button>
   </div>
-  <div class="muted" style="margin-top:6px" title="⌘Z isn't reliable after a long run — it lands as many undo steps. Use restore points instead.">Every run is saved as a restore point and a Figma version.</div>
-  <div class="muted" id="restoreRow" style="margin-top:6px">
-    <span id="restoreText">Looking for restore points…</span> <a id="browse" class="hidden" style="color:var(--figma-color-text-brand);cursor:pointer">Browse restore points</a>
+  <div class="muted" id="restoreRow" style="margin-top:6px" title="Use restore points rather than ⌘Z: a long run lands in Figma's undo history as many steps.">
+    <span id="restoreText">Every run saves a restore point first.</span> <a id="browse" class="hidden" style="color:var(--figma-color-text-brand);cursor:pointer">Browse</a>
   </div>
 </div>
 
@@ -1204,6 +1204,7 @@ function sampledFrames(fn, start, end, tol, extraTimes) {
 }
 
 const n3 = x => +(+x).toFixed(3);
+const dur = x => `${(+x).toFixed(2)}s`;   // a length as shown on screen
 const pct = (t, D) => `${+(Math.min(1, Math.max(0, t / D)) * 100).toFixed(3)}%`;
 
 function keyframesRule(name, frames, D, decl) {
@@ -1305,10 +1306,11 @@ function clearLabel() {
   // With nothing selected "everything except the selection" is the whole page,
   // so the button asks for something to keep instead.
   clear.disabled = !others || !selected;
-  clear.textContent = !selected ? "Select what to keep, to remove the rest"
-    : others === null ? "Counting other animation…"
-    : !others ? "No other animation on this page"
-    : `Remove animation from ${others} other layer${others === 1 ? "" : "s"}…`;
+  clear.textContent = others && selected ? `Remove other animation (${others.toLocaleString()})…` : "Remove other animation…";
+  clear.title = !selected ? "Select what to keep first; this removes animation from everything else on the page."
+    : others === null ? "Counting the other animation on this page…"
+    : !others ? "Nothing else on this page is animated."
+    : `${others.toLocaleString()} animated layer${others === 1 ? "" : "s"} outside your selection. You'll see what's kept and what goes before anything is removed.`;
 }
 clear.addEventListener("click", () => {
   result.innerHTML = "";
@@ -1391,6 +1393,33 @@ function renderClearReview(msg) {
 }
 
 const stop = document.getElementById("stop");
+
+// The footer's Copy and Remove act on the plan on screen, so they step aside
+// while a run is going, while browsing restore points, and while a review card
+// has its own confirm button — one obvious next click at a time.
+let runningNow = false;
+function syncFooter() {
+  const away = runningNow || view === "history" || !!document.getElementById("review");
+  go.classList.toggle("hidden", away);
+  clear.classList.toggle("hidden", away || currentMode === "export");
+  document.querySelectorAll(".modes button").forEach(b => { b.disabled = runningNow || building || view === "history"; });
+}
+// Results and reviews sit above the plan; bring a new one into view.
+// Results and reviews sit above the plan; bring a new one into view. A result
+// stays until dismissed or the next run, so it gets a close button (a review
+// has its own Cancel).
+new MutationObserver(() => {
+  syncFooter();
+  const card = result.firstElementChild;
+  if (!card) return;
+  if (card.id !== "review" && !card.querySelector(".dismiss")) {
+    const x = el("a", "dismiss", "✕");
+    x.title = "Dismiss";
+    x.addEventListener("click", () => { result.innerHTML = ""; });
+    card.insertBefore(x, card.firstChild);
+  }
+  card.scrollIntoView({ block: "nearest" });
+}).observe(result, { childList: true });
 // Answer every export the panel is still waiting for, so a build can never
 // hang on a reply that won't come.
 function releaseWaiting(reason) {
@@ -1409,29 +1438,49 @@ stop.addEventListener("click", () => {
 // and shown again on the way back.
 let points = [], historyInfo = { page: "", error: "" }, view = "plan", stashedPlan = null;
 const browse = document.getElementById("browse");
-const fmtWhen = at => { const t = new Date(at); return `${t.toLocaleDateString()} ${t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`; };
+const fmtWhen = at => {
+  const t = new Date(at), day = d => new Date(d).toDateString();
+  const date = day(t) === day(Date.now()) ? "today" : day(t) === day(Date.now() - 864e5) ? "yesterday" : t.toLocaleDateString();
+  return `${date} ${t.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+};
 
 function historyLabel() {
   const text = document.getElementById("restoreText");
   browse.classList.toggle("hidden", !points.length);
   if (historyInfo.error) { text.textContent = `Couldn't read restore points: ${historyInfo.error}`; return; }
-  if (!points.length) { text.textContent = `No restore points on “${historyInfo.page}” yet. Older states are in File › Show version history.`; return; }
-  text.textContent = `${points.length} restore point${points.length === 1 ? "" : "s"}, latest ${fmtWhen(points[0].at)}.`;
+  if (!points.length) { text.textContent = "Every run saves a restore point first, so it can be undone."; return; }
+  text.textContent = `${points.length} restore point${points.length === 1 ? "" : "s"} on this page, latest ${fmtWhen(points[0].at)} ·`;
 }
-browse.addEventListener("click", () => { view = "history"; renderHistory(); });
+// The plan on screen is set aside, not thrown away — ticks and built export
+// banners come back with it — and the footer's buttons, which act on that
+// plan, are hidden meanwhile.
+let stashedDom = null;
+browse.addEventListener("click", () => {
+  // Mid-export the rows being updated would be set aside; wait for it.
+  if (view === "history" || building) return;
+  view = "history";
+  stashedDom = document.createDocumentFragment();
+  while (out.firstChild) stashedDom.appendChild(out.firstChild);
+  renderHistory();
+  syncFooter();
+});
 
 function leaveHistory() {
   view = "plan";
   out.innerHTML = "";
   result.innerHTML = "";
+  syncFooter();
+  // A newer plan arrived while browsing (a run, or the selection changed).
   if (stashedPlan) { render(stashedPlan); stashedPlan = null; }
+  else if (stashedDom) { out.appendChild(stashedDom); count(); }
   else parent.postMessage({ pluginMessage: { type: "scan" } }, "*");
+  stashedDom = null;
 }
 
 function renderHistory() {
   out.innerHTML = "";
   result.innerHTML = "";
-  const back = el("a", null, "← Back to copying");
+  const back = el("a", null, "← Back");
   back.style.cssText = "color:var(--figma-color-text-brand);cursor:pointer;display:inline-block;margin-top:10px";
   back.addEventListener("click", leaveHistory);
   out.appendChild(back);
@@ -1442,7 +1491,8 @@ function renderHistory() {
     const head = el("div");
     head.appendChild(el("b", null, p.label));
     card.appendChild(head);
-    card.appendChild(el("div", "where", `${fmtWhen(p.at)} · ${p.count.toLocaleString()} layer${p.count === 1 ? "" : "s"}` +
+    const when = fmtWhen(p.at);
+    card.appendChild(el("div", "where", `${when.charAt(0).toUpperCase()}${when.slice(1)} · ${p.count.toLocaleString()} layer${p.count === 1 ? "" : "s"}` +
       (p.versionSaved ? " · Figma version saved" : "") + (p.legacy ? " · from an earlier version of this plugin" : "")));
     if (i > 0) card.appendChild(el("div", "where", `${i} newer restore point${i === 1 ? "" : "s"} above — going back here undoes those too, for the layers they share.`));
     const btns = el("div", "btns");
@@ -1475,7 +1525,7 @@ function renderGoBackReview(msg) {
   card.id = "review";
   card.appendChild(el("b", null, `Review: go back to before “${msg.label}”`));
   if (msg.note) card.appendChild(el("div", "warn", msg.note));
-  card.appendChild(el("div", "total", `Puts ${msg.layers.toLocaleString()} layer${msg.layers === 1 ? "" : "s"} back to how they were at ${fmtWhen(msg.at)}, just before that run.`));
+  card.appendChild(el("div", "total", `Puts ${msg.layers.toLocaleString()} layer${msg.layers === 1 ? "" : "s"} back to how they were just before that run (${fmtWhen(msg.at)}).`));
   if (msg.names.length) card.appendChild(el("div", "where", msg.names.map(n => `${n.name} ×${n.count}`).join(", ")));
   if (msg.later.length) card.appendChild(el("div", "warn", `This also undoes ${msg.later.length} newer restore point${msg.later.length === 1 ? "" : "s"} for the layers they share: ${msg.later.slice(0, 4).join("; ")}${msg.later.length > 4 ? "…" : ""}`));
   card.appendChild(el("div", "muted", "Animation you added by hand since then, on those same layers, is replaced too. Going back is saved as a restore point, so it can be undone."));
@@ -1504,6 +1554,18 @@ function el(tag, cls, text) {
   return e;
 }
 
+// Paths all start with the same long board name; the end is what tells
+// banners apart, so show that, with the whole path on hover.
+function shortWhere(path, keep = 2) {
+  const parts = String(path || "").split(" › ");
+  return parts.length > keep ? `… › ${parts.slice(-keep).join(" › ")}` : String(path || "");
+}
+function whereEl(path, keep = 2, extra = "") {
+  const e = el("div", "where", shortWhere(path, keep) + extra);
+  e.title = path;
+  return e;
+}
+
 const HELP = {
   content: "Select your animated banner. Its animation goes to every layer showing the same copy, picture or component.",
   layout: "Select animated banner(s). Each one's animation goes to the same spots in every other banner its size.",
@@ -1529,7 +1591,7 @@ function count() {
   let n = 0;
   out.querySelectorAll("input.t:checked").forEach(c => { n += Number(c.dataset.n || 1); });
   go.disabled = !n;
-  go.textContent = n ? `Copy animation to ${n} layer${n === 1 ? "" : "s"}` : "Copy animation";
+  go.textContent = n ? `Copy to ${n.toLocaleString()} layer${n === 1 ? "" : "s"}` : "Copy animation";
 }
 
 function render(msg) {
@@ -1608,13 +1670,21 @@ function renderSuite(msg) {
   const size = msg.hero.size;
   const total = msg.steps.reduce((n, s) => n + s.layers, 0);
   const copyIssues = msg.copyIssues || [];
-  const attention = msg.notReached.length + msg.partial.length + msg.layoutBanners.length + copyIssues.length;
+  // A banner whose headline is one of the differing wordings is already
+  // explained under "Wording differs", so it isn't listed a second time.
+  // (The plan clips long copy to 60 characters with "…", so compare the start.)
+  const wordings = copyIssues.flat().map(v => v.copy);
+  const isVariant = c => { const head = String(c).replace(/…$/, ""); return wordings.some(w => w.startsWith(head)); };
+  const explained = msg.partial.filter(it => it.texts.every(t => isVariant(t.copy)));
+  const partial = msg.partial.filter(it => !explained.includes(it));
+  const attention = msg.notReached.length + partial.length + msg.layoutBanners.length;
 
   // 1. The outcome, in one line.
   const sum = el("div", "card");
   sum.appendChild(el("div", "total", `Animates ${msg.reachedTotal} of ${plural(msg.bannerTotal, "banner")}`));
-  sum.appendChild(el("div", "muted", `${plural(total, "layer")} in total. Nothing changes until you click Copy.` +
-    (attention ? ` ${plural(attention, "banner")} need a look — see below.` : "")));
+  const flags = [copyIssues.length ? `${plural(copyIssues.length, "message")} worded differently between banners` : "",
+                 attention ? `${plural(attention, "banner")} need${attention === 1 ? "s" : ""} a look` : ""].filter(Boolean);
+  sum.appendChild(el("div", "muted", `${plural(total, "layer")} in total.` + (flags.length ? ` ${flags.join(", ")} — see below.` : "")));
   for (const b of msg.blocked) sum.appendChild(el("div", "err", b));
   out.appendChild(sum);
 
@@ -1652,14 +1722,15 @@ function renderSuite(msg) {
   out.appendChild(steps);
 
   // 4. Anything a person should check, each with why and what to do.
-  if (attention) {
+  if (attention || copyIssues.length) {
     const need = el("div", "card");
     need.appendChild(el("b", null, "Needs a look"));
     if (copyIssues.length) {
       const d = el("details");
       d.open = true;
       d.appendChild(el("summary", "err", `Wording differs between banners — ${copyIssues.length} message${copyIssues.length === 1 ? "" : "s"}`));
-      d.appendChild(el("div", "muted", "The same message is worded slightly differently on different banners — usually a typo, or a copy edit that missed some sizes. Fix it in Figma so they match. Until then, headlines won't animate on banners whose wording differs from the banner it's copied from."));
+      d.appendChild(el("div", "muted", "The same message is worded slightly differently on different banners — usually a typo, or a copy edit that missed some sizes. Fix it in Figma so they match, then reselect your banner to plan again." +
+        (explained.length ? ` Until then the headline stays still on ${plural(explained.length, "banner")} (their other layers still animate).` : "")));
       for (const issue of copyIssues) {
         const box = el("div");
         box.style.cssText = "border-left:2px solid var(--figma-color-border-danger, #e5484d);padding-left:8px;margin-top:8px";
@@ -1687,7 +1758,7 @@ function renderSuite(msg) {
         const a = el("a", null, "Show");
         a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: it.id } }, "*"));
         const txt = el("div");
-        txt.appendChild(el("div", "where", it.where));
+        txt.appendChild(whereEl(it.where));
         const extra = describeItem && describeItem(it);
         if (extra) { const ex = el("div", null, extra); ex.style.whiteSpace = "pre-line"; txt.appendChild(ex); }
         row.appendChild(a); row.appendChild(txt);
@@ -1698,11 +1769,35 @@ function renderSuite(msg) {
     list(`${plural(msg.notReached.length, "banner")} won't be animated`,
       "Nothing in these matched your banner. Each one says why, layer by layer. Fix it in Figma, or animate one by hand.",
       msg.notReached, it => (it.why || []).join("\n"));
-    list(`${plural(msg.partial.length, "banner")}: the headline won't move`,
-      `Headlines are matched by their exact wording. These don't match any animated banner word for word, so their CTA and logo animate but the headline stays still. Make the wording match, or animate one banner of that size and use Same layout.`,
-      msg.partial, it => it.texts.map(t => t.near
-        ? `Says: “${t.copy}”\nClosest animated headline: “${t.near}”`
-        : `Says: “${t.copy}” — no animated headline is close`).join("\n"));
+    if (partial.length) {
+      // Usually many banners share one wording; say it once per wording.
+      const groups = new Map();
+      for (const it of partial) {
+        const said = it.texts.map(t => t.near
+          ? `Says: “${t.copy}”\nClosest animated headline: “${t.near}”`
+          : `Says: “${t.copy}” — no animated headline is close`).join("\n");
+        if (!groups.has(said)) groups.set(said, []);
+        groups.get(said).push(it);
+      }
+      const d = el("details");
+      d.appendChild(el("summary", "warn", `${plural(partial.length, "banner")}: the headline won't move`));
+      d.appendChild(el("div", "muted", "Headlines are matched by their exact wording. These don't match any animated banner word for word, so their other layers animate but the headline stays still. Make the wording match, or animate one banner of that size and use Same layout."));
+      for (const [said, items] of groups) {
+        const box = el("div");
+        box.style.cssText = "border-left:2px solid var(--figma-color-border);padding-left:8px;margin-top:8px";
+        const t = el("div", null, said); t.style.whiteSpace = "pre-line";
+        box.appendChild(t);
+        for (const it of items) {
+          const row = el("div", "row");
+          const a = el("a", null, "Show");
+          a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: it.id } }, "*"));
+          row.appendChild(a); row.appendChild(whereEl(it.where));
+          box.appendChild(row);
+        }
+        d.appendChild(box);
+      }
+      need.appendChild(d);
+    }
     list(`${plural(msg.layoutBanners.length, `${size} banner`)}: some layers not found`,
       `These are laid out differently from your banner, so some of its animated layers had no counterpart.`,
       msg.layoutBanners, it => [it.missing.length ? `Not found: ${it.missing.join(", ")}` : "",
@@ -1734,7 +1829,8 @@ function renderLayout(msg) {
     const card = el("div", "card");
     const head = el("div");
     head.appendChild(el("b", null, h.name));
-    head.appendChild(el("span", "muted", ` — ${h.size}, ${h.sources.length} animated layer${h.sources.length === 1 ? "" : "s"}`));
+    const sized = h.name.replace(/\s*[x×]\s*/, "×") === h.size;   // most banners are named by their size
+    head.appendChild(el("span", "muted", ` — ${sized ? "" : `${h.size}, `}${h.sources.length} animated layer${h.sources.length === 1 ? "" : "s"}`));
     card.appendChild(head);
     const ul = el("ul", "anim");
     for (const s of h.sources) ul.appendChild(el("li", null, `${s.name}: ${s.lines.join("; ")}`));
@@ -1778,12 +1874,17 @@ function renderLayout(msg) {
       const a = el("a", null, b.name);
       a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: b.id } }, "*"));
       txt.appendChild(a);
-      txt.appendChild(el("div", "where", b.where + (b.hidden ? " · hidden" : "")));
+      // Where it sits, on the same line: the last part of the path is what
+      // tells same-size banners apart.
+      const at = el("span", "where", ` · ${String(b.where || "").split(" › ").pop()}${b.hidden ? " · hidden" : ""}`);
+      at.title = b.where;
+      txt.appendChild(at);
+      // Only say what was found when something wasn't.
       const n = h.sources.length;
-      txt.appendChild(el("div", b.missing.length || b.locked.length ? "warn" : "where",
-        `${b.pairs.length}/${n} layers found` +
-        (b.missing.length ? ` — no match for ${b.missing.join(", ")}` : "") +
-        (b.locked.length ? ` — inside a component, can't animate: ${b.locked.join(", ")}` : "")));
+      if (b.pairs.length < n || b.missing.length || b.locked.length)
+        txt.appendChild(el("div", "warn", `${b.pairs.length} of ${n} layers found` +
+          (b.missing.length ? ` — no match for ${b.missing.join(", ")}` : "") +
+          (b.locked.length ? ` — inside a component, can't animate: ${b.locked.join(", ")}` : "")));
       const guessed = b.pairs.filter(p => p.how !== "same layer");
       if (guessed.length)
         txt.appendChild(el("div", "where", guessed.map(p => `${p.srcName} → ${p.how}`).join("; ")));
@@ -1869,17 +1970,18 @@ function renderExport(msg) {
   pause.type = "number"; pause.min = 0; pause.max = 10; pause.step = 0.5; pause.value = exportLoop.pause; pause.style.width = "48px";
   const pauseLab = el("label");
   pauseLab.style.cssText = "display:flex;gap:4px;align-items:center;margin:0";
-  pauseLab.appendChild(document.createTextNode("pause"));
+  pauseLab.appendChild(document.createTextNode("with a"));
   pauseLab.appendChild(pause);
-  pauseLab.appendChild(document.createTextNode("s between"));
-  const sync = () => { pause.disabled = plays.value === "1"; pauseLab.style.opacity = pause.disabled ? 0.4 : 1; };
+  pauseLab.appendChild(document.createTextNode("s pause on the end frame between plays"));
+  // A pause only means something between plays.
+  const sync = () => { pause.disabled = plays.value === "1"; pauseLab.classList.toggle("hidden", pause.disabled); };
   const changed = () => {
     exportLoop = { plays: Number(plays.value), pause: Math.max(0, parseFloat(pause.value) || 0) };
     sync();
     if (built.size) {
       built = new Map();
       previewId = null;
-      out.querySelectorAll("input.xb").forEach(c => { delete c.dataset.built; setStatus(c.dataset.id, "Build again"); });
+      out.querySelectorAll("input.xb[data-built]").forEach(c => { delete c.dataset.built; setStatus(c.dataset.id, "Build again"); });
       const pv = document.getElementById("xpreview"); if (pv) pv.classList.add("hidden");
     }
     exportButton();
@@ -1891,14 +1993,19 @@ function renderExport(msg) {
   sync();
   card.appendChild(opts);
 
-  // Rows, grouped under where they sit so the long path shows once.
+  // Rows, grouped under where they sit. Every group usually shares the same
+  // long board name, so the heading leaves that off and shows what differs.
   const list = el("div");
   list.id = "xlist";
+  const paths = exportPlan.map(b => String(b.where || "").split(" › "));
+  let common = 0;
+  while (paths.length && paths.every(p => p.length > common + 1 && p[common] === paths[0][common])) common++;
   let group = null;
   for (const b of exportPlan) {
     if (b.where !== group) {
       group = b.where;
-      const gh = el("div", "xgroup", group || "This page");
+      const parts = String(group || "").split(" › ");
+      const gh = el("div", "xgroup", group ? parts.slice(Math.min(common, parts.length - 1)).join(" › ") : "This page");
       gh.title = group;
       list.appendChild(gh);
     }
@@ -1933,7 +2040,7 @@ function statusText(b) {
   const warns = b.out.results.filter(r => r.status === "warn").length;   // motion notes are among these
   const first = b.out.results.find(r => r.status === "block");
   return blocks ? `✗ Not to spec — ${first.rule.title.toLowerCase()}: ${first.detail}` + (blocks > 1 ? ` (+${blocks - 1} more)` : "")
-    : `✓ Ready — ${Converter.kb(b.out.chosen.zipBytes)}, ${n3(b.duration)}s` + (warns ? ` · ${warns} note${warns === 1 ? "" : "s"}` : "");
+    : `✓ Ready — ${Converter.kb(b.out.chosen.zipBytes)}, ${dur(b.duration)}` + (warns ? ` · ${warns} note${warns === 1 ? "" : "s"}` : "");
 }
 
 // A row's state while working: plain text in a neutral pill, no reason line.
@@ -1968,7 +2075,7 @@ function renderStatus(id, b) {
     }
     return;
   }
-  s.textContent = `${Converter.kb(b.out.chosen.zipBytes)} · ${n3(b.duration)}s`; s.className = "pill ok";
+  s.textContent = `${Converter.kb(b.out.chosen.zipBytes)} · ${dur(b.duration)}`; s.className = "pill ok";
   w.className = "why";
   if (notes.length) w.textContent = notes.map(n => n.detail).join(" ");
 }
@@ -2094,7 +2201,10 @@ function showBanner(id) {
   if (!b) { pv.appendChild(el("div", "muted", "Build this banner first to preview it.")); return; }
   previewId = id;
   // The full path already ends with the banner's name.
-  pv.appendChild(el("b", null, b.payload ? (b.payload.where.endsWith(b.payload.name) ? b.payload.where : `${b.payload.where} › ${b.payload.name}`) : "Banner"));
+  const path = b.payload ? (b.payload.where.endsWith(b.payload.name) ? b.payload.where : `${b.payload.where} › ${b.payload.name}`) : "Banner";
+  const title = el("b", null, shortWhere(path, 2));
+  title.title = path;
+  pv.appendChild(title);
   if (b.error) { pv.appendChild(el("div", "err", b.error)); return; }
   pv.appendChild(el("div", b.ok ? "ok" : "err", statusText(b)));
 
@@ -2120,9 +2230,9 @@ function showBanner(id) {
   const row = el("div", "btns"); row.style.marginTop = "8px";
   const play = el("button", "ghost", "Play");
   const end = el("button", "ghost", "End frame");
-  const time = el("span", "muted", `${n3(b.duration)}s`);
+  const time = el("span", "muted", `${dur(b.duration)}`);
   const scrub = el("input"); scrub.type = "range"; scrub.min = 0; scrub.max = 1000; scrub.value = 0; scrub.style.width = "100%";
-  const seek = ms => { f.contentWindow.postMessage({ cmd: "seek", t: ms }, "*"); time.textContent = `${(ms / 1000).toFixed(2)}s / ${n3(b.duration)}s`; };
+  const seek = ms => { f.contentWindow.postMessage({ cmd: "seek", t: ms }, "*"); time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(b.duration)}`; };
   play.addEventListener("click", () => f.contentWindow.postMessage({ cmd: "play" }, "*"));
   end.addEventListener("click", () => { scrub.value = 1000; seek(D); });
   scrub.addEventListener("input", () => seek(D * scrub.value / 1000));
@@ -2220,11 +2330,11 @@ function renderGallery() {
   play.addEventListener("click", () => tell({ cmd: "play" }));
   const ends = el("button", "ghost", "End frames");
   const scrub = el("input"); scrub.type = "range"; scrub.min = 0; scrub.max = 1000; scrub.value = 0; scrub.style.flex = "1"; scrub.style.minWidth = "160px";
-  const time = el("span", "muted", `0.00s / ${n3(longest)}s`);
+  const time = el("span", "muted", `0.00s / ${dur(longest)}`);
   scrub.addEventListener("input", () => {
     const ms = longest * 1000 * scrub.value / 1000;
     tell({ cmd: "seek", t: ms });
-    time.textContent = `${(ms / 1000).toFixed(2)}s / ${n3(longest)}s`;
+    time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(longest)}`;
   });
   ends.addEventListener("click", () => {
     // Each to its own end, since lengths can differ.
@@ -2266,7 +2376,7 @@ function renderGallery() {
     }
     tile.appendChild(box);
     const cap = el("div", "cap");
-    cap.appendChild(el("div", r.ok ? "ok" : "err", `${r.ok ? "✓" : "✗"} ${W}×${H}${r.ok ? ` · ${Converter.kb(r.out.chosen.zipBytes)} · ${n3(r.duration)}s` : ""}`));
+    cap.appendChild(el("div", r.ok ? "ok" : "err", `${r.ok ? "✓" : "✗"} ${W}×${H}${r.ok ? ` · ${Converter.kb(r.out.chosen.zipBytes)} · ${dur(r.duration)}` : ""}`));
     cap.appendChild(el("div", "where", (r.payload && r.payload.headline) || plan.where));
     tile.appendChild(cap);
     tile.title = "Open this banner's full preview and checks";
@@ -2324,7 +2434,7 @@ let currentMode = "content";
 document.querySelectorAll(".modes button").forEach(b => b.addEventListener("click", () => {
   currentMode = b.dataset.mode;
   // Export has nothing to do with removing animation; the count isn't made there.
-  clear.classList.toggle("hidden", currentMode === "export");
+  syncFooter();
 }));
 
 go.addEventListener("click", () => {
@@ -2399,9 +2509,8 @@ onmessage = ev => {
     stop.classList.toggle("hidden", !msg.on);
     stop.disabled = false;
     stop.textContent = "Stop";
-    go.classList.toggle("hidden", msg.on);
-    clear.classList.toggle("hidden", msg.on || currentMode === "export");
-    document.querySelectorAll(".modes button").forEach(b => { b.disabled = msg.on; });
+    runningNow = !!msg.on;
+    syncFooter();
   }
   if (msg.type === "restored") {
     result.innerHTML = "";
@@ -2458,7 +2567,7 @@ onmessage = ev => {
           a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "focus", id: f.id } }, "*"));
           row.appendChild(a);
         }
-        txt.appendChild(el("div", "where", f.where));
+        txt.appendChild(whereEl(f.where, 3));
         if (f.detail) txt.appendChild(el("div", "where", f.detail));
         row.appendChild(txt);
         card.appendChild(row);

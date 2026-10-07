@@ -1178,6 +1178,7 @@ $("again").addEventListener("click", () => {
 function loopChanged() {
   const multi = Number($("plays").value) > 1;
   $("pause").disabled = !multi;
+  $("pause").closest("label").classList.toggle("hidden", !multi);   // only means something between plays
   $("loopnote").textContent = $("plays").value === "auto"
     ? "Loops are kept as Figma exported them, capped to fit the spec."
     : multi ? "The end frame holds for the pause, then the animation replays. The last play ends on the end frame."

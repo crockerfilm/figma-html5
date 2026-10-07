@@ -1223,7 +1223,7 @@ $("dlZip").addEventListener("click", async () => {
  * lets you scrub the animation. Entirely separate from the convert pipeline
  * above; it reads what is in the file rather than rebuilding anything.
  * ========================================================================== */
-const BUILD = "2026-10-07b";
+const BUILD = "2026-10-07c";
 $("build").textContent = "build " + BUILD;
 $("ispecline").textContent = $("specline").textContent;
 
@@ -1426,7 +1426,8 @@ window.addEventListener("message", function (e) {
     var max = 0;
     a.forEach(function (x) {
       var t = x.effect.getComputedTiming();
-      var end = (t.delay || 0) + (isFinite(t.activeDuration) ? t.activeDuration : 0);
+      // An animation that loops forever counts one play.
+      var end = (t.delay || 0) + (isFinite(t.activeDuration) ? t.activeDuration : (t.duration || 0));
       if (end > max) max = end;
     });
     parent.postMessage({ type: "probe", count: a.length, max: max }, "*");
@@ -1536,9 +1537,10 @@ function renderInspect(audit) {
       <div><b>${esc(c.title)}</b>${c.detail ? `<p>${esc(c.detail)}</p>` : ""}</div>
     </div>`).join("");
 
-  $("iendnote").textContent = audit.anim.count
-    ? "Drag to scrub. Check the end frame shows your call to action — a seamless loop freezes on frame one, which is easy to miss at full speed."
-    : "";
+  $("iendnote").textContent = !audit.anim.count ? ""
+    : audit.anim.infinite
+      ? "Drag to scrub one loop. Check the jump from the end back to the start looks clean — fading everything out at the end avoids a jump."
+      : "Drag to scrub. Check the end frame shows your call to action — the ad stops there.";
 
   $("ireport").classList.remove("hidden");
   mountInspect(audit);

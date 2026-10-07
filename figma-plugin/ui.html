@@ -2330,7 +2330,13 @@ function showBanner(id) {
   const end = el("button", "ghost", "End frame");
   const time = el("span", "muted", `${dur(b.duration)}`);
   const scrub = el("input"); scrub.type = "range"; scrub.min = 0; scrub.max = 1000; scrub.value = 0; scrub.style.width = "100%";
-  const seek = ms => { f.contentWindow.postMessage({ cmd: "seek", t: ms }, "*"); time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(b.duration)}`; };
+  // A banner that loops is back at its first frame the instant a play ends,
+  // so its end is shown a moment before.
+  const seek = ms => {
+    const t = b.loops ? Math.min(ms, Math.max(0, D - 30)) : ms;
+    f.contentWindow.postMessage({ cmd: "seek", t }, "*");
+    time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(b.duration)}`;
+  };
   play.addEventListener("click", () => f.contentWindow.postMessage({ cmd: "play" }, "*"));
   end.addEventListener("click", () => { scrub.value = 1000; seek(D); });
   scrub.addEventListener("input", () => seek(D * scrub.value / 1000));
@@ -2433,12 +2439,18 @@ function renderGallery() {
   const time = el("span", "muted", `0.00s / ${dur(longest)}`);
   scrub.addEventListener("input", () => {
     const ms = longest * 1000 * scrub.value / 1000;
-    tell({ cmd: "seek", t: ms });
+    // A looping banner shown at or past the end of its play would wrap to its
+    // first frame; hold it just before.
+    shown.forEach((i, k) => {
+      if (!frames[k]) return;
+      const t = i.r.loops ? Math.min(ms, i.r.duration * 1000 - 30) : ms;
+      try { frames[k].contentWindow.postMessage({ cmd: "seek", t }, "*"); } catch (e) { /* not loaded yet */ }
+    });
     time.textContent = `${(ms / 1000).toFixed(2)}s / ${dur(longest)}`;
   });
   ends.addEventListener("click", () => {
     // Each to its own end, since lengths can differ.
-    shown.forEach((i, k) => { if (frames[k] && i.r.ok) frames[k].contentWindow.postMessage({ cmd: "seek", t: i.r.duration * 1000 }, "*"); });
+    shown.forEach((i, k) => { if (frames[k] && i.r.ok) frames[k].contentWindow.postMessage({ cmd: "seek", t: i.r.duration * 1000 - (i.r.loops ? 30 : 0) }, "*"); });
     scrub.value = 1000; time.textContent = "End frames";
   });
   head.appendChild(back); head.appendChild(filter); head.appendChild(play); head.appendChild(ends); head.appendChild(scrub); head.appendChild(time);

@@ -1061,7 +1061,7 @@ function render(out) {
     ? `<div><b>Not to spec — ${blockers.length} thing${blockers.length === 1 ? "" : "s"} to change</b>
        <p>Fix the flagged items below in Figma, then export and drop it in again.</p></div>`
     : `<div><b>Ready to deliver</b>
-       <p>${fixes.length ? `${fixes.length} issue${fixes.length === 1 ? "" : "s"} corrected automatically. ` : ""}Everything else already met spec.</p></div>`;
+       <p>${fixes.length ? `${fixes.length} issue${fixes.length === 1 ? "" : "s"} corrected automatically. Everything else already met spec.` : "Everything already met spec."}</p></div>`;
 
   // rule text carries layer names and URLs read out of the dropped file
   const esc = s => String(s == null ? "" : s)

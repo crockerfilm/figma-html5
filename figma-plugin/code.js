@@ -168,6 +168,31 @@ function where(n) {
   }
 }
 
+// Every layer below `root` that passes `pred`, in document order. Figma's own
+// findAll throws "node does not exist" if any layer in the tree is deleted or
+// rebuilt while it runs (Motion editing rebuilds layers), so walk it here and
+// skip anything that vanished instead of stopping the whole job.
+function safeFindAll(root, pred) {
+  const out = [];
+  const kids = n => { try { return "children" in n ? n.children.slice() : []; } catch (e) { return []; } };
+  const stack = kids(root).reverse();
+  while (stack.length) {
+    const n = stack.pop();
+    let ok = false;
+    try { ok = !n.removed && (!pred || !!pred(n)); } catch (e) { continue; }
+    if (ok) out.push(n);
+    const c = kids(n);
+    for (let i = c.length - 1; i >= 0; i--) stack.push(c[i]);
+  }
+  return out;
+}
+
+// findAllWithCriteria by type, falling back to the safe walk if Figma throws.
+function safeByType(root, types) {
+  try { return root.findAllWithCriteria({ types }); }
+  catch (e) { return safeFindAll(root, n => types.includes(n.type)); }
+}
+
 function safeId(n) { try { return n.id; } catch (e) { return "?"; } }
 function safeName(n) { try { return n.name; } catch (e) { return "(deleted layer)"; } }
 // Figma marks a node removed when it is deleted or rebuilt — e.g. the layers
@@ -208,7 +233,7 @@ function within(nodes) {
   const ids = new Set();
   for (const n of nodes) {
     ids.add(n.id);
-    if ("findAll" in n) for (const d of n.findAll()) ids.add(d.id);
+    if ("findAll" in n) for (const d of safeFindAll(n)) ids.add(d.id);
   }
   return ids;
 }
@@ -351,7 +376,7 @@ async function scanContent(seq, sel) {
   // hero banner picks up every animated layer at once.
   const sources = [], seen = new Set();
   for (const s of sel) {
-    const cands = [s].concat("findAll" in s ? s.findAll(hasMotion) : []);
+    const cands = [s].concat("findAll" in s ? safeFindAll(s, hasMotion) : []);
     for (const c of cands) if (!seen.has(c.id) && hasMotion(c)) { seen.add(c.id); sources.push(c); }
   }
   if (!sources.length)
@@ -430,7 +455,7 @@ async function scanContent(seq, sel) {
 // same-size wrapper frame is part of that banner, not a second banner.
 function outermost(frames) {
   const inside = new Set();
-  for (const f of frames) for (const d of f.findAllWithCriteria({ types: ["FRAME"] })) inside.add(d.id);
+  for (const f of frames) for (const d of safeByType(f, ["FRAME"])) inside.add(d.id);
   return frames.filter(f => !inside.has(f.id));
 }
 const sizeKey = n => `${Math.round(n.width)}×${Math.round(n.height)}`;
@@ -528,11 +553,11 @@ async function scanLayout(seq, sel) {
   say("Finding banner-sized frames on this page…");
   await new Promise(r => setTimeout(r, 0));
   if (stale(seq)) return;
-  const frames = figma.currentPage.findAllWithCriteria({ types: ["FRAME"] });
+  const frames = safeByType(figma.currentPage, ["FRAME"]);
   // Frames inside a component instance, found from the instances downward.
   const inInstance = new Set();
-  for (const inst of figma.currentPage.findAllWithCriteria({ types: ["INSTANCE"] }))
-    for (const f of inst.findAllWithCriteria({ types: ["FRAME"] })) inInstance.add(f.id);
+  for (const inst of safeByType(figma.currentPage, ["INSTANCE"]))
+    for (const f of safeByType(inst, ["FRAME"])) inInstance.add(f.id);
 
   const taken = new Set();
   const out = [];
@@ -541,7 +566,7 @@ async function scanLayout(seq, sel) {
     say(`Reading the animation on ${hero.name}${label}…`);
     const h = { id: hero.id, name: hero.name, size: sizeKey(hero), sources: [], blocked: [], banners: [] };
     const heroMap = mapBanner(hero);
-    for (const s of hero.findAll(hasMotion)) {
+    for (const s of safeFindAll(hero, hasMotion)) {
       const problem = presetProblem(s);
       if (problem) { h.blocked.push(`${s.name}: ${problem}`); continue; }
       const e = heroMap.byId.get(s.id);
@@ -606,7 +631,7 @@ async function scanSuite(seq, sel) {
   say(`Reading the animation on ${hero.name}…`);
   const heroMap = mapBanner(hero);
   const sources = [], blocked = [];
-  for (const s of hero.findAll(hasMotion)) {
+  for (const s of safeFindAll(hero, hasMotion)) {
     const problem = presetProblem(s);
     if (problem) { blocked.push(`${s.name}: ${problem}`); continue; }
     const e = heroMap.byId.get(s.id);
@@ -722,7 +747,7 @@ async function scanSuite(seq, sel) {
   for (const [ci, b] of frames.entries()) {
     if (ci % 25 === 0) { await pause(`Checking which frames are banners — ${ci + 1} of ${frames.length}`); if (stale(seq)) return; }
     if (!sizes.has(sizeKey(b)) || heroIds.has(b.id) || page.inst(b) || !page.shown(b)) continue;
-    const inside = b.findAll();
+    const inside = safeFindAll(b);
     const has = new Set();
     for (const n of inside) if (kindNames.has(n.name) && kinds.has(kindOf(n)) && page.shown(n)) has.add(kindOf(n));
     if (has.size < needKinds) continue;
@@ -893,7 +918,7 @@ function findByKey(key) {
     return figma.currentPage.findAllWithCriteria({ pluginData: { keys: [key] } });
   } catch (e) {
     // Slower, but works where searching by plugin data isn't supported.
-    return figma.currentPage.findAll(n => { try { return !!n.getPluginData(key); } catch (x) { return false; } });
+    return safeFindAll(figma.currentPage, n => { try { return !!n.getPluginData(key); } catch (x) { return false; } });
   }
 }
 
@@ -1207,7 +1232,7 @@ async function reviewClear(note) {
     say("Reading the animation you're keeping…");
     const keep = [], seen = new Set();
     for (const s of sel) {
-      for (const n of [s].concat("findAll" in s ? s.findAll(hasMotion) : [])) {
+      for (const n of [s].concat("findAll" in s ? safeFindAll(s, hasMotion) : [])) {
         if (seen.has(n.id) || !hasMotion(n)) continue;
         seen.add(n.id);
         keep.push({ id: n.id, name: n.name, where: where(n), lines: describe(n).lines });
@@ -1360,7 +1385,7 @@ async function scanExportPage(seq) {
     const up = page.ancestors(b).next().value || "";   // the frame it sits in, which groups it
     list.push({ id: b.id, name: b.name, where: where(b), group: up, x: Math.round(b.x), y: Math.round(b.y),
                 w: Math.round(b.width), h: Math.round(b.height), hidden: !page.shown(b),
-                animated: (hasMotion(b) ? 1 : 0) + b.findAll(hasMotion).length });
+                animated: (hasMotion(b) ? 1 : 0) + safeFindAll(b, hasMotion).length });
   }
   if (stale(seq)) return;
   post({ type: "plan", mode, auto: true, offSize, banners: list, leftovers: leftoverCopies() });
@@ -1378,7 +1403,7 @@ async function scanExport(seq, sel) {
     try { up = b.parent ? b.parent.id : ""; } catch (e) { /* grouped by name instead */ }
     list.push({ id: b.id, name: b.name, where: where(b), group: up, x: Math.round(b.x), y: Math.round(b.y),
                 w: Math.round(b.width), h: Math.round(b.height),
-                animated: (hasMotion(b) ? 1 : 0) + b.findAll(hasMotion).length });
+                animated: (hasMotion(b) ? 1 : 0) + safeFindAll(b, hasMotion).length });
   }
   if (stale(seq)) return;
   post({ type: "plan", mode, banners: list, leftovers: leftoverCopies() });
@@ -1448,7 +1473,7 @@ async function exportBanner(id, fixSize) {
     // Hidden layers aren't in the export, so animating them is meaningless —
     // visibility worked out downward, as everywhere else.
     const shownIn = mapBanner(b);
-    const animated = (hasMotion(b) ? [b] : []).concat(b.findAll(hasMotion).filter(n => (shownIn.byId.get(n.id) || {}).shown));
+    const animated = (hasMotion(b) ? [b] : []).concat(safeFindAll(b, hasMotion).filter(n => (shownIn.byId.get(n.id) || {}).shown));
     const notes = [];
 
     copy = b.clone();
@@ -1493,7 +1518,7 @@ async function exportBanner(id, fixSize) {
     }
 
     // 1. At rest: no animation anywhere on the copy, so the export is the layout.
-    for (const n of [copy].concat(copy.findAll(hasMotion))) {
+    for (const n of [copy].concat(safeFindAll(copy, hasMotion))) {
       try { clearAnimation(n); } catch (e) { /* reported if it shows up as a missing layer */ }
     }
 
@@ -1567,7 +1592,7 @@ async function exportBanner(id, fixSize) {
     // each banner carries — version frames often share a name.
     let headline = "";
     try {
-      const texts = b.findAll(n => n.type === "TEXT" && n.visible !== false && norm(n.characters).split(" ").length >= 3);
+      const texts = safeFindAll(b, n => n.type === "TEXT" && n.visible !== false && norm(n.characters).split(" ").length >= 3);
       texts.sort((x, y) => ((x.absoluteBoundingBox || {}).y || 0) - ((y.absoluteBoundingBox || {}).y || 0));
       if (texts[0]) headline = norm(texts[0].characters);
     } catch (e) { /* optional */ }

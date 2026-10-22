@@ -491,27 +491,33 @@ function mapBanner(banner) {
   const byId = new Map(), list = [];
   (function walk(x, path, shown, inst) {
     const counts = new Map();
-    for (const c of x.children || []) {
-      const key = c.type + "\u0000" + c.name;
-      const i = counts.get(key) || 0;
-      counts.set(key, i + 1);
-      const entry = {
-        node: c,
-        path: path.concat([{ name: c.name, type: c.type, i }]),
-        shown: shown && c.visible !== false,
-        inst: inst || (c.type === "INSTANCE" ? c : null),
-        box: null
-      };
-      byId.set(c.id, entry);
+    let kids = [];
+    try { kids = x.children || []; } catch (e) { return; }   // rebuilt by Figma mid-read
+    for (const c of kids) {
+      let key, entry;
+      try {
+        key = c.type + "\u0000" + c.name;
+        const i = counts.get(key) || 0;
+        counts.set(key, i + 1);
+        entry = {
+          node: c,
+          path: path.concat([{ name: c.name, type: c.type, i }]),
+          shown: shown && c.visible !== false,
+          inst: inst || (c.type === "INSTANCE" ? c : null),
+          box: null
+        };
+        byId.set(c.id, entry);
+      } catch (e) { continue; }
       list.push(entry);
-      walk(c, entry.path, entry.shown, inst || (c.type === "INSTANCE" ? c : null));
+      walk(c, entry.path, entry.shown, entry.inst);
     }
   })(banner, [], true, null);
   return { byId, list };
 }
 
 function relBox(n, root) {
-  const a = n.absoluteBoundingBox, r = root.absoluteBoundingBox;
+  let a, r;
+  try { a = n.absoluteBoundingBox; r = root.absoluteBoundingBox; } catch (e) { return null; }   // rebuilt mid-read
   return a && r ? { x: a.x - r.x, y: a.y - r.y, w: a.width, h: a.height } : null;
 }
 

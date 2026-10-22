@@ -72,16 +72,28 @@ function imageHashes(n) {
 function pictureHashes(n) {
   const out = new Set();
   (function walk(x) {
-    if (x.visible === false) return;
-    const h = imageHashes(x);
-    if (h) h.split("+").forEach(v => out.add(v));
-    if ("children" in x) for (const c of x.children) walk(c);
+    // A layer Figma rebuilt mid-read is skipped, not fatal.
+    try {
+      if (x.visible === false) return;
+      const h = imageHashes(x);
+      if (h) h.split("+").forEach(v => out.add(v));
+      if ("children" in x) for (const c of x.children) walk(c);
+    } catch (e) { /* gone */ }
   })(n);
   return out.size ? [...out].sort().join("+") : null;
 }
 
-// What a layer shows, as a key two layers share when they show the same thing.
+// Figma rebuilds layers inside components while a plugin reads them (Motion
+// editing, pages loading in), and every read of a rebuilt layer throws "does
+// not exist". Such a layer is skipped rather than stopping the whole scan.
+const isGone = e => /does not exist|has been removed|node .* removed/i.test(String((e && e.message) || e));
 async function matchKey(n, needComponents) {
+  try { return await matchKeyOf(n, needComponents); }
+  catch (e) { if (isGone(e)) return null; throw e; }
+}
+
+// What a layer shows, as a key two layers share when they show the same thing.
+async function matchKeyOf(n, needComponents) {
   if (n.type === "TEXT") {
     const copy = norm(n.characters);
     return { kind: "copy", key: "t:" + copy, label: `same copy “${clip(copy, 60)}”` };
@@ -262,15 +274,19 @@ async function walkPageFresh(seq, label) {
   let k = 0;
   while (stack.length) {
     const [n, parent, inst, shownAbove] = stack.pop();
-    const shown = shownAbove && n.visible !== false;
+    let shown, ch = [];
+    try {
+      shown = shownAbove && n.visible !== false;
+      if ("children" in n) ch = n.children;
+    } catch (e) { continue; }   // rebuilt by Figma mid-walk: skip it
     info.set(n.id, { parent, inst, shown });
     list.push(n);
     if (++k % 500 === 0) {
       await pause(`${label} — ${plural(k, "layer")} read`);
       if (stale(seq)) return null;
     }
-    if ("children" in n) {
-      const ch = n.children, below = inst || (n.type === "INSTANCE" ? n : null);
+    if (ch.length) {
+      const below = inst || (n.type === "INSTANCE" ? n : null);
       for (let i = ch.length - 1; i >= 0; i--) stack.push([ch[i], n.id, below, shown]);
     }
   }
@@ -386,6 +402,7 @@ async function scanContent(seq, sel) {
   const byKey = new Map();
   for (const s of sources) {
     const k = await matchKey(s, true);
+    if (!k) continue;   // rebuilt by Figma mid-read
     const d = describe(s);
     const entry = { id: s.id, name: s.name, kind: k.kind, key: k.key, label: k.label,
                     sourceName: s.name, lines: d.lines, warn: d.warn, matches: [], locked: [], note: "", blocked: "" };
@@ -414,35 +431,37 @@ async function scanContent(seq, sel) {
       await pause(`Comparing ${plural(i, "layer")} of ${nodes.length.toLocaleString()} with the ${plural(entries.length, "animated layer")} — ${found} match${found === 1 ? "" : "es"} so far`);
       if (stale(seq)) return;
     }
-    const n = nodes[i];
-    if (heroIds.has(n.id)) continue;
-    const k = await matchKey(n, needComponents);
-    let entry = k && byKey.get(k.key);
-    // A name-matched source also claims same-named layers of other kinds — a
-    // logo can be a frame in one size and an instance in the next.
-    if (!entry && byName.has(n.name)) entry = byName.get(n.name);
-    if (!entry) continue;
+    try {
+      const n = nodes[i];
+      if (heroIds.has(n.id)) continue;
+      const k = await matchKey(n, needComponents);
+      let entry = k && byKey.get(k.key);
+      // A name-matched source also claims same-named layers of other kinds — a
+      // logo can be a frame in one size and an instance in the next.
+      if (!entry && byName.has(n.name)) entry = byName.get(n.name);
+      if (!entry) continue;
 
-    let target = n, via = "";
-    const inst = page.inst(n);
-    if (inst) {
-      if (!fills(n, inst)) {
-        entry.locked.push(`${where(n)} › ${n.name}`);
-        continue;
+      let target = n, via = "";
+      const inst = page.inst(n);
+      if (inst) {
+        if (!fills(n, inst)) {
+          entry.locked.push(`${where(n)} › ${n.name}`);
+          continue;
+        }
+        target = inst;
+        via = `applied to the whole component “${inst.name}”, since Figma can't animate a layer inside one`;
       }
-      target = inst;
-      via = `applied to the whole component “${inst.name}”, since Figma can't animate a layer inside one`;
-    }
-    if (claimed.has(target.id)) continue;
-    // Skip a layer whose parent already gets this same animation: Figma files
-    // nest same-named frames, and animating both doubles the motion.
-    let nested = false;
-    for (const id of page.ancestors(target)) if (matchedBy.get(id) === entry) { nested = true; break; }
-    if (nested) continue;
-    claimed.add(target.id);
-    matchedBy.set(target.id, entry);
-    entry.matches.push({ id: target.id, name: target.name, where: where(target), hidden: !page.shown(target), via });
-    found++;
+      if (claimed.has(target.id)) continue;
+      // Skip a layer whose parent already gets this same animation: Figma files
+      // nest same-named frames, and animating both doubles the motion.
+      let nested = false;
+      for (const id of page.ancestors(target)) if (matchedBy.get(id) === entry) { nested = true; break; }
+      if (nested) continue;
+      claimed.add(target.id);
+      matchedBy.set(target.id, entry);
+      entry.matches.push({ id: target.id, name: target.name, where: where(target), hidden: !page.shown(target), via });
+      found++;
+    } catch (e) { if (!isGone(e)) throw e; }   // rebuilt by Figma mid-read: skip it
   }
 
   if (stale(seq)) return;
@@ -682,6 +701,7 @@ async function scanSuite(seq, sel) {
   let conflicts = 0;
   const register = async (node, src, step) => {
     const k = await matchKey(node, true);
+    if (!k) return;   // rebuilt by Figma mid-read
     const prev = byKey.get(k.key);
     if (prev) { if (prev.src.node.id !== src.node.id) conflicts++; return; }
     const rec = { src, step, kind: k.kind };
@@ -702,25 +722,27 @@ async function scanSuite(seq, sel) {
       await pause(`Steps 1 and 3: comparing ${plural(i, "layer")} of ${nodes.length.toLocaleString()} — ${plural(assign.size, "match")} so far`);
       if (stale(seq)) return;
     }
-    const n = nodes[i];
-    if (heroIds.has(n.id)) continue;
-    const k = await matchKey(n, needComponents);
-    let rec = k && byKey.get(k.key);
-    if (!rec && byName.has(n.name)) rec = byName.get(n.name);
-    if (!rec) continue;
-    let target = n;
-    const inst = page.inst(n);
-    if (inst) {
-      if (!fills(n, inst)) { lockedCount++; continue; }
-      target = inst;
-    }
-    if (assign.has(target.id)) continue;
-    // Skip a layer whose parent already gets this same animation.
-    let nested = false;
-    for (const id of page.ancestors(target)) { const a = assign.get(id); if (a && a.src === rec.src.node.id) { nested = true; break; } }
-    if (nested) continue;
-    if (!page.shown(target)) { hiddenSkipped++; continue; }
-    assign.set(target.id, { src: rec.src.node.id, step: rec.step });
+    try {
+      const n = nodes[i];
+      if (heroIds.has(n.id)) continue;
+      const k = await matchKey(n, needComponents);
+      let rec = k && byKey.get(k.key);
+      if (!rec && byName.has(n.name)) rec = byName.get(n.name);
+      if (!rec) continue;
+      let target = n;
+      const inst = page.inst(n);
+      if (inst) {
+        if (!fills(n, inst)) { lockedCount++; continue; }
+        target = inst;
+      }
+      if (assign.has(target.id)) continue;
+      // Skip a layer whose parent already gets this same animation.
+      let nested = false;
+      for (const id of page.ancestors(target)) { const a = assign.get(id); if (a && a.src === rec.src.node.id) { nested = true; break; } }
+      if (nested) continue;
+      if (!page.shown(target)) { hiddenSkipped++; continue; }
+      assign.set(target.id, { src: rec.src.node.id, step: rec.step });
+    } catch (e) { if (!isGone(e)) throw e; }   // rebuilt by Figma mid-read: skip it
   }
 
   // Which banners were reached. The hero's siblings define the suite's sizes.
@@ -1668,7 +1690,19 @@ function guard(job, label) {
            detail: String((e && e.stack) || "").split("\n").slice(0, 4).join("\n") });
   });
 }
-const runScan = guard(scan, "Scanning");
+// A scan that still trips over a layer Figma rebuilt is simply run again
+// (it only reads), up to twice, before the error is shown.
+async function scanRetrying() {
+  for (let attempt = 0; ; attempt++) {
+    try { return await scan(); }
+    catch (e) {
+      if (!isGone(e) || attempt >= 2) throw e;
+      say("A layer changed while reading — reading again…");
+      await new Promise(r => setTimeout(r, 400));
+    }
+  }
+}
+const runScan = guard(scanRetrying, "Scanning");
 const runApply = guard(apply, "Copying");
 const runSuite = guard(applySuite, "Copying");
 const runClear = guard(clearOthers, "Removing");

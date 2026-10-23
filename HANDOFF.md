@@ -351,6 +351,10 @@ Development → Import plugin from manifest → `figma-plugin/manifest.json`. Us
   that fades out over the last F seconds of every cycle, after the pause; `applyLoop(doc,
   plays, pause, fade)` makes the cycle T + pause + F. Export copies are tagged with plugin
   data `copyMotion.exportCopy` and never listed; leftovers are reported.
+- **Sharper images, 750 KB (2026-10-23):** the client found 1× images fuzzy on a Retina Mac
+  and its media BOM caps banners at 750 KB, so `SPEC.maxZipKB` is 750 and the resolution
+  ladder starts at 2× the drawn size (never past the source's own pixels), stepping down
+  only to fit. "Resampled to fit" now means below 1×.
 - **Sharing with the team:** zip `manifest.json`, `code.js`, `ui.html` and `README.md` from
   `figma-plugin/` into a folder called `Copy Motion` (the zip is attached to each GitHub
   release). Teammates import `manifest.json` once in the Figma desktop app; for an update

@@ -115,7 +115,7 @@ const Converter = (() => {
  * in this file needs to change.
  * ========================================================================== */
 const SPEC = {
-  maxZipKB: 200,               // max initial load for an HTML ad tag
+  maxZipKB: 750,               // max initial load: the client's stated limit (media BOM)
   maxAnimationSeconds: 15,     // one play of the timeline
   maxTotalSeconds: Infinity,   // across all plays (Infinity: no limit)
   maxLoops: Infinity,          // plays (Infinity: no cap)
@@ -130,12 +130,13 @@ const SPEC = {
   formatAlpha: "image/png",
 
   // Resolution ladder, as fractions of the size each image is actually drawn at
-  // on the canvas. Rung 0 is a 1:1 pixel match, and nothing is ever upscaled past
-  // its source. Being relative to the image rather than the canvas means a small
-  // decorative element is never encoded at hero resolution, and a hero is never
-  // starved to pay for one. Each image picks its own rung against measured encoded
-  // bytes — no assumptions about what any image contains.
-  ladder: [1, 0.8, 0.65, 0.5, 0.4, 0.32, 0.25, 0.2, 0.15, 0.1]
+  // on the canvas. Rung 0 is 2× — sharp on Retina screens, where 1× looked fuzzy
+  // to the client — and nothing is ever upscaled past its source. Being relative
+  // to the image rather than the canvas means a small decorative element is never
+  // encoded at hero resolution, and a hero is never starved to pay for one. Each
+  // image picks its own rung against measured encoded bytes — no assumptions
+  // about what any image contains.
+  ladder: [2, 1.5, 1, 0.8, 0.65, 0.5, 0.4, 0.32, 0.25, 0.2, 0.15, 0.1]
 };
 
 const $ = id => document.getElementById(id);
@@ -882,7 +883,7 @@ async function run(file, opts = {}) {
   for (const g of groups.values()) {
     const img = await loadImage(g.href);
     const src = ctx.images.find(im => im.href === g.href) || {};
-    // Rung 0 means "exactly the pixels it is drawn at" — never more.
+    // The size it is drawn at; the ladder scales from here (up to 2× for Retina).
     const target = Math.max(src.dispW || 0, src.dispH || 0)
                 || Math.max(img.naturalWidth, img.naturalHeight);
     decoded.push({ href: g.href, els: g.els, img, alpha: usesAlpha(img), target });
@@ -973,7 +974,9 @@ async function run(file, opts = {}) {
   const html = markupHtml;
 
   if (chosen.zipBytes <= budget) {
-    const reduced = assets.filter(a => a.rung > 0);
+    // Only an image below the size it's drawn at counts as reduced; 1.5× is
+    // still sharper than the screen.
+    const reduced = assets.filter(a => SPEC.ladder[a.rung] < 1);
     results.push({ rule: weightRule,
       ...(reduced.length
         ? fixed(`${kb(chosen.zipBytes)} — ${reduced.length} image(s) resampled to fit.`,

@@ -74,6 +74,10 @@ web tool's own checks and packaging. Click a built banner to preview it with a s
 headline, size, KB, length, notes). Banners that don't meet spec are left out, as on the
 web tool.
 
+**Images and weight:** photos are packed at up to 2× the size they're drawn at, so they
+stay sharp on Retina screens, within the client's 750 KB limit; they only step down if a
+banner would go over.
+
 **Size fixes:** an export must be exactly its frame's size. On the export copy only (your
 frame is never changed), the plugin clips anything past the frame's edge and drops the
 frame's own drop shadow, and a frame named for a size but 1–2 px off is exported at the

@@ -92,14 +92,14 @@ Click a banner for its full preview and spec checks.
 
 **Plays** (once, 2, 3 or **Loops forever**) and **Pause between plays** sit above the list
 and are the same option as on the web tool: the end frame holds for the pause, then the
-animation replays, and the last play ends on the end frame. Google rejects animation that
-runs past 30 s, so **Loops forever** is blocked and the default is 3 plays with an 8 s pause
-and a 1 s fade (27 s for a 3 s timeline). To restart cleanly, tick **Fade animated layers
+animation replays, and the last play ends on the end frame. Animation must stop within 15 s
+(the IAB guideline; Google rejects anything past 30 s), so **Loops forever** is blocked and
+the default is 2 plays with an 8 s pause and a 1 s fade (exactly 15 s for a 3 s timeline). To restart cleanly, tick **Fade animated layers
 out before each replay** and the export does it for you: after the pause, every animated layer fades out
 over the time you set (0.5 s by default), then the animation replays. Static layers and any
 animated layer holding a background-sized image don't fade; the last of a set number of
 plays ends on the end frame without fading. One play must be 15 s or less, and all plays
-together 30 s or less. Changing them after building marks the banners to build again.
+together 15 s or less. Changing them after building marks the banners to build again.
 
 Each banner in the list has **Show**, to find it in Figma. Two banners the same size at
 exactly the same spot are flagged as a likely duplicate. Export works on a temporary copy;

@@ -216,10 +216,10 @@
  *   · zip + backup JPG under 200 KB together (client spec sheet), with the
  *     backup under 50 KB, so the zip stays under 150,000 bytes. That is also
  *     Google Ad Manager's 150K initial-load limit.
- *   · animation stops within 30 s. DV360 rejects "Creative animates longer
- *     than 30 seconds", so a banner can't loop forever: choose a number of
- *     plays that ends by then (3 plays of a 3 s timeline with an 8 s hold and
- *     a 1 s fade is 27 s).
+ *   · animation stops within 15 s. DV360 rejects "Creative animates longer
+ *     than 30 seconds", so a banner can't loop forever, and the IAB guideline
+ *     DV360 points to (which direct publishers enforce) is 15 s: 2 plays of a
+ *     3 s timeline with an 8 s hold and a 1 s fade is exactly 15 s.
  *   · text outlined · no external calls · flat package · ad.size meta · IAB
  *     clickTag · explicit end tags in the inline SVG (Google Ads rejects
  *     <path/>).
@@ -230,7 +230,7 @@
 const SPEC = {
   maxZipKB: 146,               // 146 × 1024 < 150,000 bytes: zip + 50 KB backup under 200 KB
   maxAnimationSeconds: 15,     // one play of the timeline
-  maxTotalSeconds: 30,         // across all plays (Infinity: no limit)
+  maxTotalSeconds: 15,         // across all plays (Infinity: no limit)
   maxLoops: Infinity,          // plays (Infinity: no cap)
   holdOnLastFrame: true,       // true: the animation must stop, not loop forever
   requireOutlinedText: true,   // no font dependency at render time
@@ -860,10 +860,17 @@ function minifyGeometry(doc, decimals) {
 // Google Ads rejects self-closing tags in inline SVG (<path/>) and wants
 // <path></path>. The serializer writes an end tag for any element that has a
 // child, so an empty text node in each childless element is enough.
+// Figma's layer names (data-name) go too: they read like file names
+// ("photo.jpg") that aren't in the zip, which an asset checker can report as
+// missing. Each <image> also gets xlink:href for browsers older than SVG 2.
 function serialize(doc) {
   const root = doc.documentElement.cloneNode(true);
-  for (const el of [root, ...root.querySelectorAll("*")])
+  for (const el of [root, ...root.querySelectorAll("*")]) {
+    el.removeAttribute("data-name");
+    if (el.localName === "image" && el.hasAttribute("href") && !el.hasAttributeNS(XLINK, "href"))
+      el.setAttributeNS(XLINK, "xlink:href", el.getAttribute("href"));
     if (!el.firstChild) el.appendChild(doc.createTextNode(""));
+  }
   return new XMLSerializer().serializeToString(root)
     .replace(/<!--[\s\S]*?-->/g, "").replace(/>\s+</g, "><");
 }
@@ -924,8 +931,14 @@ ${svgMarkup}
       el.addEventListener('click', function () {
         // Re-checked at click time: an ad server may overwrite clickTag after
         // load, and only a web address should ever be opened.
-        var u = window.clickTag;
-        if (u && /^https?:\\/\\//i.test(u)) { window.open(u, '_blank'); }
+        if (window.clickTag && /^https?:\\/\\//i.test(window.clickTag)) {
+          window.open(window.clickTag, '_blank');
+          // Google's ad-serving rules: animation stops on an exit click.
+          // Finishing lands every animation on its end frame.
+          if (document.getAnimations) {
+            document.getAnimations().forEach(function (a) { try { a.finish(); } catch (e) {} });
+          }
+        }
       });
     })();
   <\/script>

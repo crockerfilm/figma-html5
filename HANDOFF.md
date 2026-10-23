@@ -70,7 +70,7 @@ needs editing to retarget it at a different placement.** Keep it that way.
 const SPEC = {
   maxZipKB: 146,               // 146 × 1024 < 150,000 bytes: zip + 50 KB backup under 200 KB
   maxAnimationSeconds: 15,     // one play of the timeline
-  maxTotalSeconds: 30,         // across all plays (Infinity: no limit)
+  maxTotalSeconds: 15,         // across all plays (Infinity: no limit)
   maxLoops: Infinity,          // plays (Infinity: no cap)
   holdOnLastFrame: true,       // true: the animation must stop
   requireOutlinedText: true,
@@ -218,10 +218,15 @@ banners "50KB (Static Only) 200KB (Static + HTML should be under 200KB)", a stat
 **JPG** for every animated banner, a clickTag that isn't hard-coded, and a coloured
 background or 1px border. Google's own pages add: DV360 rejects a creative that "animates
 longer than 30 seconds" (so no infinite loop), Google Ad Manager caps initial load at 150K,
-and Google Ads rejects self-closing tags in inline SVG. So: `maxZipKB: 146` (zip under
-150,000 bytes, leaving 50 KB for the backup JPG beside it), `maxTotalSeconds: 30`,
-`holdOnLastFrame: true`, explicit end tags in `serialize()`, and the plugin defaults to 3
-plays with an 8 s hold and a 1 s fade (27 s for a 3 s timeline). The approved banner below
+and Google Ads rejects self-closing tags in inline SVG. The IAB guideline DV360 points to,
+which direct publishers enforce, caps animation at 15 s. So: `maxZipKB: 146` (zip under
+150,000 bytes, leaving 50 KB for the backup JPG beside it), `maxTotalSeconds: 15`,
+`holdOnLastFrame: true`, explicit end tags in `serialize()`, and the plugin defaults to 2
+plays with an 8 s hold and a 1 s fade (exactly 15 s for a 3 s timeline). The exit click
+calls `window.open(window.clickTag, '_blank')` directly (Google's documented form) and
+finishes every animation, since Google's ad-serving rules stop animation on an exit click.
+`serialize()` also drops Figma's `data-name` layer names, which read like image files
+missing from the zip, and writes `xlink:href` beside `href` on each image. The approved banner below
 looped forever; that is no longer allowed. The 750 KB in the media BOM was not the
 placement limit.
 

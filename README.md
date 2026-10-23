@@ -127,7 +127,7 @@ the file needs to change to retarget it at a different placement.
 const SPEC = {
   maxZipKB: 146,           // zip under 150,000 bytes, leaving 50 KB for the backup JPG
   maxAnimationSeconds: 15, // one play of the timeline
-  maxTotalSeconds: 30,     // all plays together
+  maxTotalSeconds: 15,     // all plays together
   holdOnLastFrame: true,   // must stop, not loop forever
   formatOpaque: "image/jpeg",
   formatAlpha:  "image/png",
@@ -137,7 +137,8 @@ const SPEC = {
 
 The shipped defaults follow Google's rules for HTML5 display (Display & Video 360,
 Campaign Manager 360, Google Ad Manager): the zip and its backup JPG under 200 KB together,
-animation that stops within 30 seconds, and JPG/PNG images. Swap them for whatever a brief
+animation that stops within 15 seconds (the IAB guideline; Google rejects anything past
+30), and JPG/PNG images. Swap them for whatever a brief
 specifies.
 
 ## Browser support

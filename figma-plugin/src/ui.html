@@ -1063,7 +1063,9 @@ function renderLayout(msg) {
 // and packages it with the web tool's own converter), then download them all
 // as one zip. Blocked banners are left out of the zip, as on the web tool.
 let exportPlan = [], built = new Map(), building = false, uiStop = false, previewId = null;
-let exportLoop = { plays: 1, pause: 0, fade: 0 };
+// Google rejects animation past 30s: 3 plays of a 3s timeline, an 8s hold on
+// the end frame and a 1s fade between plays is 27s, ending on the end frame.
+let exportLoop = { plays: 3, pause: 8, fade: 1 };
 const fixSizeFor = new Set();   // banners the person chose to export at their named size
 const waiting = new Map();   // banner id → resolver for its "exported" message
 

@@ -68,17 +68,17 @@ needs editing to retarget it at a different placement.** Keep it that way.
 
 ```js
 const SPEC = {
-  maxZipKB: 200,               // max initial load for an HTML ad tag
+  maxZipKB: 146,               // 146 × 1024 < 150,000 bytes: zip + 50 KB backup under 200 KB
   maxAnimationSeconds: 15,     // one play of the timeline
-  maxTotalSeconds: Infinity,   // across all plays (Infinity: no limit)
+  maxTotalSeconds: 30,         // across all plays (Infinity: no limit)
   maxLoops: Infinity,          // plays (Infinity: no cap)
-  holdOnLastFrame: false,      // true: the animation must stop
+  holdOnLastFrame: true,       // true: the animation must stop
   requireOutlinedText: true,
   allowExternalRefs: false,
   jpegQuality: 0.8,
   formatOpaque: "image/jpeg",
   formatAlpha: "image/png",
-  ladder: [1, 0.8, 0.65, 0.5, 0.4, 0.32, 0.25, 0.2, 0.15, 0.1]
+  ladder: [2, 1.5, 1, 0.8, 0.65, 0.5, 0.4, 0.32, 0.25, 0.2, 0.15, 0.1]
 };
 ```
 
@@ -210,6 +210,20 @@ this codebase is prone to.
 ---
 
 ## 6. Where the spec numbers come from, and what's still uncertain
+
+**Update 2026-10-23 — Google's rules, from the client's media team.** Programmatic runs
+through DV360 on CM360 specs, and the direct buys (Activate, Intensify) default to Google's
+ad specs. The client's creative spec sheet gives DV360 HTML
+banners "50KB (Static Only) 200KB (Static + HTML should be under 200KB)", a static backup
+**JPG** for every animated banner, a clickTag that isn't hard-coded, and a coloured
+background or 1px border. Google's own pages add: DV360 rejects a creative that "animates
+longer than 30 seconds" (so no infinite loop), Google Ad Manager caps initial load at 150K,
+and Google Ads rejects self-closing tags in inline SVG. So: `maxZipKB: 146` (zip under
+150,000 bytes, leaving 50 KB for the backup JPG beside it), `maxTotalSeconds: 30`,
+`holdOnLastFrame: true`, explicit end tags in `serialize()`, and the plugin defaults to 3
+plays with an 8 s hold and a 1 s fade (27 s for a 3 s timeline). The approved banner below
+looped forever; that is no longer allowed. The 750 KB in the media BOM was not the
+placement limit.
 
 **Update 2026-10-07 — the spec now matches the client's approved banner, not Amazon Ads.**
 These banners advertise the client; they don't run on Amazon's ad inventory, so Amazon's
@@ -351,10 +365,15 @@ Development → Import plugin from manifest → `figma-plugin/manifest.json`. Us
   that fades out over the last F seconds of every cycle, after the pause; `applyLoop(doc,
   plays, pause, fade)` makes the cycle T + pause + F. Export copies are tagged with plugin
   data `copyMotion.exportCopy` and never listed; leftovers are reported.
-- **Sharper images, 750 KB (2026-10-23):** the client found 1× images fuzzy on a Retina Mac
-  and its media BOM caps banners at 750 KB, so `SPEC.maxZipKB` is 750 and the resolution
-  ladder starts at 2× the drawn size (never past the source's own pixels), stepping down
-  only to fit. "Resampled to fit" now means below 1×.
+- **Sharper images (2026-10-23):** the client found 1× images fuzzy on a Retina Mac, so the
+  resolution ladder starts at 2× the drawn size (never past the source's own pixels),
+  stepping down only to fit. "Resampled to fit" now means below 1×. The budget briefly was
+  750 KB (the media BOM); it is now Google's 150 KB (see section 6).
+- **Hidden images cost weight:** 48 of 59 banners in one delivery carried images that never show
+  (copy variants stacked under the visible photo, or a photo used only as a mask shape).
+  Removing them let nearly every visible image ship at 2× inside 150 KB. For that delivery
+  this was done outside the tool, proving each removal pixel-identical at 44 points in the
+  timeline; the tool doesn't do it yet, so hide or delete unused layers in Figma.
 - **Sharing with the team:** zip `manifest.json`, `code.js`, `ui.html` and `README.md` from
   `figma-plugin/` into a folder called `Copy Motion` (the zip is attached to each GitHub
   release). Teammates import `manifest.json` once in the Figma desktop app; for an update

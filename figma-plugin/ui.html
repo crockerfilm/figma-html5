@@ -103,23 +103,28 @@ const Converter = (() => {
 // Figma plugin (figma-plugin/build.mjs). Keep it free of page-specific code.
 /* ============================================================================
  * SPEC
- * Matched to a banner the client approved (not made with this tool):
- *   300×250 · zip 78 KB · 10s timeline that loops forever (a timeline event
- *   jumps back to the start), fading everything out over its last second so
- *   each loop starts clean · text outlined · JPEG background · no external
- *   calls · flat package · ad.size meta · IAB clickTag.
- * So looping forever is allowed and there's no cap on plays or total time.
- * The 15s limit on one play is a guard, not something that banner sets (its
- * play is 10s). The 200 KB cap is the IAB-standard envelope it sits inside.
+ * Google's rules for HTML5 display, which the client's programmatic (DV360,
+ * trafficked through CM360) and direct buys both follow:
+ *   · zip + backup JPG under 200 KB together (client spec sheet), with the
+ *     backup under 50 KB, so the zip stays under 150,000 bytes. That is also
+ *     Google Ad Manager's 150K initial-load limit.
+ *   · animation stops within 30 s. DV360 rejects "Creative animates longer
+ *     than 30 seconds", so a banner can't loop forever: choose a number of
+ *     plays that ends by then (3 plays of a 3 s timeline with an 8 s hold and
+ *     a 1 s fade is 27 s).
+ *   · text outlined · no external calls · flat package · ad.size meta · IAB
+ *     clickTag · explicit end tags in the inline SVG (Google Ads rejects
+ *     <path/>).
+ * The 15 s limit on one play is a guard, not something the client sets.
  * Change these numbers if a placement is briefed differently — nothing else
  * in this file needs to change.
  * ========================================================================== */
 const SPEC = {
-  maxZipKB: 750,               // max initial load: the client's stated limit (media BOM)
+  maxZipKB: 146,               // 146 × 1024 < 150,000 bytes: zip + 50 KB backup under 200 KB
   maxAnimationSeconds: 15,     // one play of the timeline
-  maxTotalSeconds: Infinity,   // across all plays (Infinity: no limit)
+  maxTotalSeconds: 30,         // across all plays (Infinity: no limit)
   maxLoops: Infinity,          // plays (Infinity: no cap)
-  holdOnLastFrame: false,      // true: the animation must stop, not loop forever
+  holdOnLastFrame: true,       // true: the animation must stop, not loop forever
   requireOutlinedText: true,   // no font dependency at render time
   allowExternalRefs: false,    // creative must be self-contained
   jpegQuality: 0.8,
@@ -542,8 +547,9 @@ const RULES = [
       if (!ctx.infinite) return pass("already finite");
       if (!SPEC.holdOnLastFrame) return pass("looping allowed");
       // Two limits apply at once: total seconds, and a hard cap on plays.
+      const limit = isFinite(SPEC.maxTotalSeconds) ? SPEC.maxTotalSeconds : SPEC.maxAnimationSeconds;
       const loops = ctx.cycle > 0
-        ? Math.max(1, Math.min(SPEC.maxLoops, Math.floor(SPEC.maxAnimationSeconds / ctx.cycle)))
+        ? Math.max(1, Math.min(SPEC.maxLoops, Math.floor(limit / ctx.cycle)))
         : 1;
       ctx.loops = loops;
       // The long form takes a bare count; the shorthand also gets "forwards"
@@ -743,8 +749,14 @@ function minifyGeometry(doc, decimals) {
   }
 }
 
+// Google Ads rejects self-closing tags in inline SVG (<path/>) and wants
+// <path></path>. The serializer writes an end tag for any element that has a
+// child, so an empty text node in each childless element is enough.
 function serialize(doc) {
-  return new XMLSerializer().serializeToString(doc.documentElement)
+  const root = doc.documentElement.cloneNode(true);
+  for (const el of [root, ...root.querySelectorAll("*")])
+    if (!el.firstChild) el.appendChild(doc.createTextNode(""));
+  return new XMLSerializer().serializeToString(root)
     .replace(/<!--[\s\S]*?-->/g, "").replace(/>\s+</g, "><");
 }
 
@@ -1980,7 +1992,9 @@ function renderLayout(msg) {
 // and packages it with the web tool's own converter), then download them all
 // as one zip. Blocked banners are left out of the zip, as on the web tool.
 let exportPlan = [], built = new Map(), building = false, uiStop = false, previewId = null;
-let exportLoop = { plays: 1, pause: 0, fade: 0 };
+// Google rejects animation past 30s: 3 plays of a 3s timeline, an 8s hold on
+// the end frame and a 1s fade between plays is 27s, ending on the end frame.
+let exportLoop = { plays: 3, pause: 8, fade: 1 };
 const fixSizeFor = new Set();   // banners the person chose to export at their named size
 const waiting = new Map();   // banner id → resolver for its "exported" message
 

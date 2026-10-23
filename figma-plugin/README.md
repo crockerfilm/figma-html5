@@ -75,8 +75,9 @@ headline, size, KB, length, notes). Banners that don't meet spec are left out, a
 web tool.
 
 **Images and weight:** photos are packed at up to 2× the size they're drawn at, so they
-stay sharp on Retina screens, within the client's 750 KB limit; they only step down if a
-banner would go over.
+stay sharp on Retina screens, and step down only if a banner would go over 150 KB (Google's
+limit, leaving 50 KB for the backup JPG). Every image in the frame counts, including ones
+hidden under other layers, so delete layers that never show.
 
 **Size fixes:** an export must be exactly its frame's size. On the export copy only (your
 frame is never changed), the plugin clips anything past the frame's edge and drops the
@@ -91,14 +92,14 @@ Click a banner for its full preview and spec checks.
 
 **Plays** (once, 2, 3 or **Loops forever**) and **Pause between plays** sit above the list
 and are the same option as on the web tool: the end frame holds for the pause, then the
-animation replays. With a number of plays the last play ends on the end frame; with Loops
-forever it never stops (as the client's approved banner does), so fade everything out at the
-end of the timeline for a clean restart — or tick **Fade animated layers out before each
-replay** and the export does it for you: after the pause, every animated layer fades out
+animation replays, and the last play ends on the end frame. Google rejects animation that
+runs past 30 s, so **Loops forever** is blocked and the default is 3 plays with an 8 s pause
+and a 1 s fade (27 s for a 3 s timeline). To restart cleanly, tick **Fade animated layers
+out before each replay** and the export does it for you: after the pause, every animated layer fades out
 over the time you set (0.5 s by default), then the animation replays. Static layers and any
 animated layer holding a background-sized image don't fade; the last of a set number of
-plays ends on the end frame without fading. One play must be 15 s or less; there's no limit
-on plays or total time. Changing them after building marks the banners to build again.
+plays ends on the end frame without fading. One play must be 15 s or less, and all plays
+together 30 s or less. Changing them after building marks the banners to build again.
 
 Each banner in the list has **Show**, to find it in Figma. Two banners the same size at
 exactly the same spot are flagged as a likely duplicate. Export works on a temporary copy;

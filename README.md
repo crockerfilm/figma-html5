@@ -125,19 +125,20 @@ the file needs to change to retarget it at a different placement.
 
 ```js
 const SPEC = {
-  maxZipKB: 200,           // max initial load for an HTML ad tag
-  maxAnimationSeconds: 15, // total animation time, including loops
-  maxLoops: 3,             // and no more than this many plays
+  maxZipKB: 146,           // zip under 150,000 bytes, leaving 50 KB for the backup JPG
+  maxAnimationSeconds: 15, // one play of the timeline
+  maxTotalSeconds: 30,     // all plays together
+  holdOnLastFrame: true,   // must stop, not loop forever
   formatOpaque: "image/jpeg",
   formatAlpha:  "image/png",
   ...
 };
 ```
 
-The shipped defaults follow the published
-[Amazon Ads technical guidelines](https://advertising.amazon.com/resources/ad-policy/technical-guidelines):
-200 KB maximum initial load, animation up to 3 loops within 15 seconds, and JPG/GIF/PNG
-as the listed image formats. Swap them for whatever a brief specifies.
+The shipped defaults follow Google's rules for HTML5 display (Display & Video 360,
+Campaign Manager 360, Google Ad Manager): the zip and its backup JPG under 200 KB together,
+animation that stops within 30 seconds, and JPG/PNG images. Swap them for whatever a brief
+specifies.
 
 ## Browser support
 

@@ -155,6 +155,7 @@
           <input type="text" id="adName">
           <div class="row" style="margin-top:12px">
             <button id="dlZip">Download .zip</button>
+            <button id="dlBackup" class="ghost">Download backup .jpg</button>
             <button id="again" class="ghost">Start over</button>
           </div>
           <p class="specline" id="outNote"></p>
@@ -236,6 +237,8 @@ const SPEC = {
   requireOutlinedText: true,   // no font dependency at render time
   allowExternalRefs: false,    // creative must be self-contained
   jpegQuality: 0.8,
+  jpegQualityFloor: 0.72,      // tried when 0.8 would shrink a photo below the size it's drawn at
+  maxBackupBytes: 49000,       // the backup JPG beside each zip: under 50 KB, and zip + backup under 200 KB
 
   // Only formats the spec lists. An image's own pixels decide which it gets:
   // anything using alpha must keep it, everything else takes the smaller one.
@@ -844,6 +847,212 @@ function applyLoop(doc, plays, pause, fade = 0) {
   return { ok: true, timeline: T, faded, total: plays === Infinity ? Infinity : plays * T + (plays - 1) * (H + F) };
 }
 
+/* ------------------------------------------------------- frame render --- */
+// One moment of the banner as pixels. Every animation must run on one clock
+// (all start at 0s, as applyLoop leaves them), so pausing them all t seconds in
+// freezes exactly that moment. The SVG is drawn as an image, so it needs every
+// image inlined as a data: URI.
+const cssOf = doc => [...doc.querySelectorAll("style")].map(s => s.textContent)
+  .concat([...doc.querySelectorAll("[style]")].map(e => e.getAttribute("style") || "")).join("\n");
+// Frames can be frozen only when every animation is a plain "animation:"
+// shorthand: long-form properties, the -webkit- prefix and SMIL aren't timed by
+// the override in frameCanvas, and long form isn't read by runLength either.
+function whyNoFreeze(doc) {
+  if (doc.querySelector("animate, animateTransform, animateMotion, set")) return "it animates with SMIL tags";
+  const css = cssOf(doc);
+  if (/(^|[;{\s])(-webkit-)?animation-(name|duration|delay|iteration-count|direction|fill-mode)\s*:|-webkit-animation\s*:/.test(css))
+    return "its animation is written in long form";
+  return "";
+}
+// And to compare frames mid-run, everything must start at 0s on one clock.
+function sharesOneClock(doc) {
+  if (whyNoFreeze(doc)) return false;
+  for (const m of cssOf(doc).matchAll(/(?:^|[;{\s])animation\s*:\s*([^;}]+)/g))
+    for (const seg of splitAnimationsRaw(m[1])) if (parseAnimation(seg).times[1]) return false;
+  return true;
+}
+async function frameCanvas(svgText, t, w, h, background) {
+  const frozen = svgText.replace(/(<svg\b[^>]*>)/,
+    `$1<style>*{animation-play-state:paused!important;animation-delay:${-(+t.toFixed(3))}s!important}</style>`);
+  const img = await loadImage("data:image/svg+xml;charset=utf-8," + encodeURIComponent(frozen));
+  const c = document.createElement("canvas");
+  c.width = Math.round(w); c.height = Math.round(h);
+  // A default canvas, like the one the signed-off delivery was checked on: a
+  // read-optimised one draws edges a hair differently.
+  const x = c.getContext("2d");
+  if (background) { x.fillStyle = background; x.fillRect(0, 0, c.width, c.height); }
+  x.drawImage(img, 0, 0, c.width, c.height);
+  return c;
+}
+// How long the animation runs in all, from every animation's delay, duration
+// and iteration count; Infinity if anything loops forever.
+function runLength(doc) {
+  let total = 0;
+  for (const m of cssOf(doc).matchAll(/(?:^|[;{\s])animation\s*:\s*([^;}]+)/g))
+    for (const seg of splitAnimationsRaw(m[1])) {
+      const a = parseAnimation(seg);
+      if (!a.name) continue;
+      total = Math.max(total, a.delay + a.duration * (a.count === "infinite" ? Infinity : parseFloat(a.count) || 1));
+    }
+  return total;
+}
+const framePixels = async (svgText, t, w, h) =>
+  (await frameCanvas(svgText, t, w, h)).getContext("2d").getImageData(0, 0, Math.round(w), Math.round(h)).data;
+// More than a rounding difference anywhere in the frame.
+function framesDiffer(a, b) {
+  for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 3) return true;
+  return false;
+}
+// When to look — the moments the delivery the client signed off was checked at:
+// every 0.1 s through the motion and half a second into the hold (at most 60
+// looks), then every 2 s of the hold, four points through the fade, and the
+// frame the ad finally stops on. Later plays repeat the first.
+function sampleTimes(timing) {
+  const T = timing.timeline || 0, H = timing.hold || 0, F = timing.fade || 0;
+  const out = [];
+  if (isFinite(timing.total) && timing.total > 0) out.push(timing.total + 0.5);
+  const step = Math.max(0.1, (T + 0.5) / 60);
+  for (let t = 0; t <= T + 0.5 + 1e-6; t += step) out.push(t);
+  for (let t = T + 1; t < T + H - 1e-6; t += 2) out.push(t);
+  if (F > 0) for (const f of [0, 0.3, 0.6, 0.9]) out.push(T + H + F * f);
+  return [...new Set(out.map(t => +t.toFixed(3)))];
+}
+const base64 = u8 => {
+  let bin = "";
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(bin);
+};
+
+/* ------------------------------------------------------ hidden images ---- */
+// Figma frames often carry images nobody sees: copy variants stacked under the
+// photo on top, or a photo used only for the outline of a mask. Every image
+// costs weight, so these starve the ones that show. Each image is tested by
+// rendering the banner through its timeline without it, against small copies
+// of every image to keep it quick, and goes only if no frame changes. Removals
+// are tried one at a time against the original, so two layers hiding each other
+// can't both go.
+function editImage(root, i, how) {
+  const ims = [...root.querySelectorAll(`image[data-cm-g="${i}"]`)];
+  if (!ims.length) return false;
+  if (how === "white" && ims.some(im => !im.hasAttribute("width") || !im.hasAttribute("height"))) return false;
+  for (const im of ims) {
+    if (how === "remove") {
+      if (im.id) root.querySelectorAll("use").forEach(u => {
+        if ((u.getAttribute("href") || u.getAttributeNS(XLINK, "href")) === `#${im.id}`) u.remove();
+      });
+      im.remove();
+    } else {
+      // Only its outline matters (it shapes an alpha mask), and an opaque photo's
+      // outline is its box: a white rect of the same size does the same job.
+      const r = im.ownerDocument.createElementNS(im.namespaceURI, "rect");
+      for (const a of [...im.attributes])
+        if (!/^(href|xlink:href|preserveAspectRatio|data-name|data-cm-g)$/.test(a.name)) r.setAttribute(a.name, a.value);
+      r.setAttribute("fill", "#fff");
+      im.replaceWith(r);
+    }
+  }
+  return true;
+}
+async function removeHiddenImages(ctx, decoded, times) {
+  if (!decoded.length) return { removed: [] };
+  const why = whyNoFreeze(ctx.doc);
+  if (why) return { removed: [], skipped: `${why}, so frames can't be compared` };
+  if (!sharesOneClock(ctx.doc)) return { removed: [], skipped: "its animations don't all start together, so frames can't be compared" };
+  if (!(times.length > 1) && ctx.keyframes) return { removed: [], skipped: "the animation's length couldn't be read" };
+  const w = ctx.width, h = ctx.height;
+  decoded.forEach((d, i) => d.els.forEach(el => el.setAttribute("data-cm-g", i)));
+  try {
+    const small = decoded.map(d => {
+      const s = Math.min(1, 160 / Math.max(d.img.naturalWidth, d.img.naturalHeight));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(d.img.naturalWidth * s)); c.height = Math.max(1, Math.round(d.img.naturalHeight * s));
+      c.getContext("2d").drawImage(d.img, 0, 0, c.width, c.height);
+      return c.toDataURL(d.alpha ? "image/png" : "image/jpeg", 0.9);
+    });
+    const proto = ctx.doc.documentElement.cloneNode(true);
+    decoded.forEach((d, i) => proto.querySelectorAll(`image[data-cm-g="${i}"]`).forEach(el => {
+      el.setAttribute("href", small[i]);
+      if (el.hasAttributeNS(XLINK, "href")) el.setAttributeNS(XLINK, "xlink:href", small[i]);
+    }));
+    const textWith = edits => {
+      const root = proto.cloneNode(true);
+      for (const [i, how] of edits) if (!editImage(root, i, how)) return null;
+      return new XMLSerializer().serializeToString(root);
+    };
+    const base = [];
+    const s0 = textWith(new Map());
+    for (const t of times) base.push(await framePixels(s0, t, w, h));
+    // A control: with every image gone the frame must change. If it doesn't,
+    // this browser didn't draw the images at all, and every comparison would
+    // wrongly call them hidden.
+    const none = textWith(new Map(decoded.map((d, i) => [i, "remove"])));
+    if (none && !framesDiffer(base[0], await framePixels(none, times[0], w, h)) &&
+        !framesDiffer(base[1] || base[0], await framePixels(none, times[1] !== undefined ? times[1] : times[0], w, h)))
+      return { removed: [], skipped: "the images didn't draw in this browser's test frames" };
+    const same = async edits => {
+      const s = textWith(edits);
+      if (!s) return false;
+      for (let k = 0; k < times.length; k++) if (framesDiffer(base[k], await framePixels(s, times[k], w, h))) return false;
+      return true;
+    };
+    const edits = new Map();
+    const order = decoded.map((d, i) => i).sort((a, b) => decoded[b].href.length - decoded[a].href.length);
+    for (const i of order)
+      for (const how of decoded[i].alpha ? ["remove"] : ["remove", "white"]) {
+        const trial = new Map(edits).set(i, how);
+        if (await same(trial)) { edits.set(i, how); break; }
+      }
+    for (const [i, how] of edits) editImage(ctx.doc.documentElement, i, how);
+    const removed = [...edits].map(([i, how]) => ({ i, how, bytes: Math.round(decoded[i].href.length * 0.75) }));
+    return { removed };
+  } catch (e) {
+    // Never let the check stop a build: if this browser can't read the frames
+    // back, everything stays in.
+    return { removed: [], skipped: `the frames couldn't be compared here (${(e && e.message) || e})` };
+  } finally {
+    ctx.doc.querySelectorAll("[data-cm-g]").forEach(el => el.removeAttribute("data-cm-g"));
+  }
+}
+
+/* ------------------------------------------------------------- backup ---- */
+// The backup image an ad server shows where HTML5 can't run: the end frame as
+// a JPEG, the best quality that fits SPEC.maxBackupBytes. Drawn from the images
+// that ship, over the shell's own black, so it matches the ad exactly.
+async function makeBackup(out) {
+  if (!out || !out.chosen || !out.html || !out.timing) return { error: "Nothing was built to make a backup from." };
+  let svg = out.html.slice(out.html.indexOf("<svg"), out.html.lastIndexOf("</svg>") + 6);
+  for (const a of out.assets) svg = svg.split(`"${a.name}"`).join(`"data:${a.type};base64,${base64(a.data)}"`);
+  const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
+  const tm = out.timing;
+  // After the last play everything sits in its final state whatever its delay,
+  // so a finite run needs no shared clock; a mid-hold frame of an endless loop does.
+  const why = whyNoFreeze(doc);
+  if (why) return { error: `The end frame can't be drawn here: ${why}. Export the backup from Figma.` };
+  if (!isFinite(tm.total) && !sharesOneClock(doc)) return { error: "It loops forever and its animations don't all start together, so the end frame can't be drawn. Export the backup from Figma." };
+  if (!(tm.total > 0) && !(tm.timeline > 0) && /@keyframes/.test(cssOf(doc))) return { error: "The animation's length couldn't be read, so the end frame isn't known. Export the backup from Figma." };
+  // The end frame: after the last play has finished, or mid-hold for a banner
+  // that loops forever.
+  const at = isFinite(tm.total) ? tm.total + 0.5 : tm.hold > 0 ? tm.timeline + tm.hold / 2 : Math.max(0, tm.timeline - 0.02);
+  try {
+    const c = await frameCanvas(svg, at, out.ctx.width, out.ctx.height, "#000");
+    const enc = async q => new Uint8Array(await (await toBlob(c, "image/jpeg", q)).arrayBuffer());
+    let lo = 0.1, hi = 0.95, best = null;
+    const top = await enc(hi);
+    if (top.length <= SPEC.maxBackupBytes) best = { q: hi, data: top };
+    else {
+      for (let k = 0; k < 8; k++) {
+        const q = (lo + hi) / 2, d = await enc(q);
+        if (d.length <= SPEC.maxBackupBytes) { best = { q, data: d }; lo = q; } else hi = q;
+      }
+      if (!best) { const d = await enc(0.1); if (d.length <= SPEC.maxBackupBytes) best = { q: 0.1, data: d }; }
+    }
+    if (!best) return { error: `Even at the lowest quality the end frame is over ${Math.round(SPEC.maxBackupBytes / 1000)} KB as a JPEG.` };
+    return { data: best.data, bytes: best.data.length, quality: +best.q.toFixed(2), at: +at.toFixed(2), width: c.width, height: c.height };
+  } catch (e) {
+    return { error: `The end frame couldn't be drawn here (${(e && e.message) || e}).` };
+  }
+}
+
 /* ------------------------------------------------------------- minify ---- */
 // Geometry only. Path coordinates are in user units, so 2 decimals is far below
 // one pixel. CSS is left alone: keyframe matrices carry scale factors like
@@ -962,6 +1171,11 @@ async function run(file, opts = {}) {
     }
   }
 
+  // When things happen, for comparing frames and drawing the end frame: one
+  // play, the hold and fade between plays, and the whole run as it now stands
+  // (after any cap on looping).
+  let timing = { timeline: ctx.cycle || 0, hold: 0, fade: 0, total: runLength(ctx.doc) };
+
   // Plays chosen by the person replace whatever looping the export had.
   if (opts.plays && opts.plays !== "auto") {
     const forever = opts.plays === "forever" || opts.plays === Infinity;
@@ -970,6 +1184,7 @@ async function run(file, opts = {}) {
     const playsRule = { id: "plays", title: "Plays" };
     const fade = plays > 1 ? Math.max(0, Number(opts.fade) || 0) : 0;
     const loop = applyLoop(ctx.doc, plays, pause, fade);
+    if (loop.ok) timing = { timeline: loop.timeline, hold: pause, fade, total: loop.total };
     if (!loop.ok) {
       results.push({ rule: playsRule, ...warn(`The number of plays couldn't be set: ${loop.reason}. Left as exported.`, "") });
     } else {
@@ -1022,6 +1237,26 @@ async function run(file, opts = {}) {
     decoded.push({ href: g.href, els: g.els, img, alpha: usesAlpha(img), target });
   }
 
+  // Images that never show cost weight the visible ones need.
+  if (decoded.length) {
+    const hidden = await removeHiddenImages(ctx, decoded, sampleTimes(timing));
+    const hiddenRule = { id: "hidden", title: "Images that never show" };
+    if (hidden.removed.length) {
+      const gone = new Set(hidden.removed.map(r => r.i));
+      for (let i = decoded.length - 1; i >= 0; i--) if (gone.has(i)) decoded.splice(i, 1);
+      ctx.images = ctx.images.filter(im => im.el.isConnected && im.el.localName === "image");
+      const n = hidden.removed.length, saved = hidden.removed.reduce((s, r) => s + r.bytes, 0);
+      const masks = hidden.removed.filter(r => r.how === "white").length;
+      results.push({ rule: hiddenRule, ...fixed(
+        `${n} image${n === 1 ? "" : "s"} that never show${n === 1 ? "s" : ""} on screen left out (${kb(saved)} of source).`,
+        `${masks ? `${masks} only shaped a mask and became a plain box; the rest ` : "They "}sat under other layers. Each was checked frame by frame through the animation: nothing on screen changed. Deleting unused layers in Figma does the same.`) });
+    } else if (hidden.skipped) {
+      results.push({ rule: hiddenRule, ...info(`Not checked: ${hidden.skipped}.`) });
+    } else {
+      results.push({ rule: hiddenRule, ...pass("Every image shows at some point.") });
+    }
+  }
+
   // Rasters ship as separate files so nothing pays the 33% base64 tax, kept flat
   // at the package root because nothing guarantees a validator walks subfolders.
   decoded.forEach((d, i) => {
@@ -1040,64 +1275,86 @@ async function run(file, opts = {}) {
   const markupBytes = new TextEncoder().encode(markupHtml);
   const markupZipped = (await deflateRaw(markupBytes)).length;
 
-  const encode = async (d, rung) => {
-    const s = Math.min(1, (d.target * SPEC.ladder[rung]) / Math.max(d.img.naturalWidth, d.img.naturalHeight));
-    const canvas = drawTo(d.img, d.img.naturalWidth * s, d.img.naturalHeight * s);
-    const blob = await toBlob(canvas, d.type, d.type === "image/jpeg" ? SPEC.jpegQuality : undefined);
-    return {
-      name: d.file, type: d.type, rung, data: new Uint8Array(await blob.arrayBuffer()),
-      w: canvas.width, h: canvas.height, natW: d.img.naturalWidth, natH: d.img.naturalHeight,
-      target: d.target, drawn: Math.max(canvas.width, canvas.height)
-    };
-  };
-  const memo = new Map();
-  const at = async (i, rung) => {
-    const key = i + ":" + rung;
-    if (!memo.has(key)) memo.set(key, await encode(decoded[i], rung));
-    return memo.get(key);
-  };
-  const totalOf = async picks => {
-    let n = 0;
-    for (let i = 0; i < picks.length; i++) n += (await at(i, picks[i])).data.length;
-    return n;
-  };
-
   const weightRule = { id: "weight", title: `Package within ${SPEC.maxZipKB} KB` };
   const imageBudget = budget - markupZipped;
-  let assets = [], picks = [], overBudget = false;
+  // The fit at one JPEG quality: every image's rung on the ladder. A PNG doesn't
+  // depend on the JPEG quality, so its encodes are shared between fits.
+  const memo = new Map();
+  const fitAt = async quality => {
+    const encode = async (d, rung) => {
+      const s = Math.min(1, (d.target * SPEC.ladder[rung]) / Math.max(d.img.naturalWidth, d.img.naturalHeight));
+      const canvas = drawTo(d.img, d.img.naturalWidth * s, d.img.naturalHeight * s);
+      const blob = await toBlob(canvas, d.type, d.type === "image/jpeg" ? quality : undefined);
+      return {
+        name: d.file, type: d.type, rung, data: new Uint8Array(await blob.arrayBuffer()),
+        w: canvas.width, h: canvas.height, natW: d.img.naturalWidth, natH: d.img.naturalHeight,
+        target: d.target, drawn: Math.max(canvas.width, canvas.height)
+      };
+    };
+    const at = async (i, rung) => {
+      const key = decoded[i].type === "image/jpeg" ? `${i}:${rung}:${quality}` : `${i}:${rung}`;
+      if (!memo.has(key)) memo.set(key, await encode(decoded[i], rung));
+      return memo.get(key);
+    };
+    const totalOf = async picks => {
+      let n = 0;
+      for (let i = 0; i < picks.length; i++) n += (await at(i, picks[i])).data.length;
+      return n;
+    };
 
-  if (imageBudget <= 0) {
-    // Markup alone is over budget, so no amount of image reduction can help.
-    // Leave them at full size: the numbers should show where the weight really
-    // is, not a set of ruined images in a package that is blocked anyway.
-    overBudget = true;
-    for (let i = 0; i < decoded.length; i++) picks.push(0);
-  } else if (decoded.length) {
-    // Give every image an equal slice, take the largest rung that fits it, then
-    // hand back whatever the split left over — largest gain first, fixed order,
-    // so the same input always lands on the same result.
-    const share = imageBudget / decoded.length;
-    for (let i = 0; i < decoded.length; i++) {
-      let chosenRung = SPEC.ladder.length - 1;
-      for (let r = 0; r < SPEC.ladder.length; r++) {
-        if ((await at(i, r)).data.length <= share) { chosenRung = r; break; }
+    let picks = [], overBudget = false;
+
+    if (imageBudget <= 0) {
+      // Markup alone is over budget, so no amount of image reduction can help.
+      // Leave them at full size: the numbers should show where the weight really
+      // is, not a set of ruined images in a package that is blocked anyway.
+      overBudget = true;
+      for (let i = 0; i < decoded.length; i++) picks.push(0);
+    } else if (decoded.length) {
+      // Give every image an equal slice, take the largest rung that fits it, then
+      // hand back whatever the split left over — largest gain first, fixed order,
+      // so the same input always lands on the same result.
+      const share = imageBudget / decoded.length;
+      for (let i = 0; i < decoded.length; i++) {
+        let chosenRung = SPEC.ladder.length - 1;
+        for (let r = 0; r < SPEC.ladder.length; r++) {
+          if ((await at(i, r)).data.length <= share) { chosenRung = r; break; }
+        }
+        picks.push(chosenRung);
       }
-      picks.push(chosenRung);
-    }
-    for (let guard = 0; guard < SPEC.ladder.length * decoded.length; guard++) {
-      let improved = false;
-      for (let i = 0; i < picks.length; i++) {
-        if (picks[i] === 0) continue;
-        const trial = picks.slice();
-        trial[i] -= 1;
-        if (await totalOf(trial) <= imageBudget) { picks = trial; improved = true; }
+      for (let guard = 0; guard < SPEC.ladder.length * decoded.length; guard++) {
+        let improved = false;
+        for (let i = 0; i < picks.length; i++) {
+          if (picks[i] === 0) continue;
+          const trial = picks.slice();
+          trial[i] -= 1;
+          if (await totalOf(trial) <= imageBudget) { picks = trial; improved = true; }
+        }
+        if (!improved) break;
       }
-      if (!improved) break;
+      overBudget = (await totalOf(picks)) > imageBudget;
     }
-    overBudget = (await totalOf(picks)) > imageBudget;
+
+    const assets = [];
+    for (let i = 0; i < decoded.length; i++) assets.push(await at(i, picks[i]));
+    return { picks, overBudget, assets, quality };
+  };
+  // A photo squeezed below the size it's drawn at looks soft; a little more JPEG
+  // compression at full size looks better. So if the first fit shrinks one, try
+  // once at the lower quality and keep that if fewer are shrunk.
+  // The retry is kept only if fewer photos are shrunk and no PNG (a logo, a
+  // cutout) is shrunk that wasn't before.
+  const isShrunk = a => a.drawn < Math.min(a.target, Math.max(a.natW, a.natH)) - 0.5;
+  const shrunk = f => f.assets.filter(a => a.type === "image/jpeg" && isShrunk(a)).length;
+  let fit = await fitAt(SPEC.jpegQuality);
+  if (SPEC.jpegQualityFloor && SPEC.jpegQualityFloor < SPEC.jpegQuality && !fit.overBudget && shrunk(fit)) {
+    const alt = await fitAt(SPEC.jpegQualityFloor);
+    const pngWorse = alt.assets.some((a, i) => a.type !== "image/jpeg" && isShrunk(a) && !isShrunk(fit.assets[i]));
+    if (!alt.overBudget && !pngWorse && shrunk(alt) < shrunk(fit)) fit = alt;
   }
-
-  for (let i = 0; i < decoded.length; i++) assets.push(await at(i, picks[i]));
+  let { picks, overBudget, assets } = fit;
+  const qNote = fit.quality === SPEC.jpegQuality ? ""
+    : ` JPEG quality ${Math.round(fit.quality * 100)}, so ${shrunk(fit) ? "fewer photos ship" : "no photo ships"} smaller than ${shrunk(fit) ? "they're" : "it's"} drawn.`;
 
   const files = [{ name: "index.html", data: markupBytes },
                  ...assets.map(a => ({ name: a.name, data: a.data }))];
@@ -1112,10 +1369,10 @@ async function run(file, opts = {}) {
     const reduced = assets.filter(a => SPEC.ladder[a.rung] < 1);
     results.push({ rule: weightRule,
       ...(reduced.length
-        ? fixed(`${kb(chosen.zipBytes)} — ${reduced.length} image(s) resampled to fit.`,
+        ? fixed(`${kb(chosen.zipBytes)} — ${reduced.length} image(s) resampled to fit.${qNote}`,
                 assets.map(a => `${a.name} ${a.natW}×${a.natH} → ${a.w}×${a.h} (${kb(a.data.length)})`).join("; ")
                 + `. Vector markup is ${kb(markupZipped)} of the total.`)
-        : pass(`${kb(chosen.zipBytes)}, nothing had to be reduced.`)) });
+        : pass(`${kb(chosen.zipBytes)}, nothing had to be reduced.${qNote}`)) });
   } else if (imageBudget <= 0) {
     results.push({ rule: weightRule,
       ...block(`The vector artwork alone is ${kb(markupZipped)}, over the ${SPEC.maxZipKB} KB budget before any image is counted.`,
@@ -1143,7 +1400,7 @@ async function run(file, opts = {}) {
       ...info(`${assets.length - png} JPEG, ${png} PNG. Format is chosen per image from its own pixels — anything using transparency has to stay PNG, since JPEG would fill those areas with black.`) });
   }
 
-  return { ctx, results, chosen, html, assets, name, blocked: false };
+  return { ctx, results, chosen, html, assets, name, timing, blocked: false };
 }
 // @converter:end
 
@@ -1179,6 +1436,7 @@ function render(out) {
     $("sizePanel").classList.add("hidden");
     $("previewBox").innerHTML = "";
     $("dlZip").disabled = true;
+    $("dlBackup").disabled = true;
     $("outNote").textContent = "";
     $("report").classList.remove("hidden");
     return;
@@ -1194,7 +1452,9 @@ function render(out) {
         <td class="num">${fmt(f.data.length)}</td></tr>`;
     }).join("")}
     <tr><td><b>Zip</b></td><td>from ${fmt(out.ctx.bytes)} source</td>
-        <td class="num"><b>${fmt(out.chosen.zipBytes)}</b> <span class="save">−${(100 - out.chosen.zipBytes / out.ctx.bytes * 100).toFixed(0)}%</span></td></tr>`;
+        <td class="num"><b>${fmt(out.chosen.zipBytes)}</b> <span class="save">−${(100 - out.chosen.zipBytes / out.ctx.bytes * 100).toFixed(0)}%</span></td></tr>
+    <tr><td>Backup .jpg</td><td>${out.backup && out.backup.data ? `end frame, JPEG quality ${Math.round(out.backup.quality * 100)} — goes beside the zip, not in it` : `not made: ${(out.backup && out.backup.error) || "—"}`}</td>
+        <td class="num">${out.backup && out.backup.data ? fmt(out.backup.bytes) : ""}</td></tr>`;
 
   const scale = Math.min(300 / out.ctx.width, 300 / out.ctx.height);
   $("previewBox").innerHTML = "";
@@ -1223,9 +1483,10 @@ function render(out) {
   $("adName").value = out.name;
   const ok = !blockers.length;
   $("dlZip").disabled = !ok;
-  $("outNote").textContent = ok
-    ? "Upload the zip as-is. The ad server supplies the landing page through clickTag."
-    : "Download is disabled until the flagged items are fixed.";
+  $("dlBackup").disabled = !ok || !(out.backup && out.backup.data);
+  $("outNote").textContent = !ok ? "Download is disabled until the flagged items are fixed."
+    : out.backup && out.backup.data ? "Upload the zip as-is, with the backup .jpg beside it (same name). The ad server supplies the landing page through clickTag."
+    : "Upload the zip as-is. No backup image could be made here, so export one from Figma (a JPG of the end frame under 50 KB, named like the zip).";
   $("report").classList.remove("hidden");
 }
 
@@ -1233,23 +1494,38 @@ function render(out) {
 // own looping, capped only if the spec says the animation must stop.
 const loopOptions = () => ({ plays: $("plays").value, pause: parseFloat($("pause").value) || 0,
                              fade: $("fadeloop").checked ? Math.max(0.1, parseFloat($("fadesecs").value) || 0.5) : 0 });
-let lastFile = null;
+let lastFile = null, buildGen = 0;
 
 async function handleFile(file) {
   lastFile = file;
+  // A rebuild (plays changed, say) mustn't leave the previous build downloadable,
+  // nor let an older, slower build land after a newer one.
+  const gen = ++buildGen;
+  $("dlZip").disabled = true;
+  $("dlBackup").disabled = true;
   const drop = $("drop");
   drop.classList.add("busy");
   drop.querySelector("strong").textContent = "Checking and converting…";
   try {
     const out = await run(file, loopOptions());
+    if (out.chosen && !out.blocked) {
+      out.backup = await makeBackup(out);
+      const backupRule = { id: "backup", title: "Backup image" };
+      out.results.push(out.backup.data
+        ? { rule: backupRule, ...pass(`${kb(out.backup.bytes)} JPEG of the end frame, to go beside the zip.`) }
+        : { rule: backupRule, ...warn(`No backup image: ${out.backup.error}`, "") });
+    }
+    if (gen !== buildGen) return;
     built = out;
     render(out);
   } catch (e) {
+    if (gen !== buildGen) return;
     $("verdict").className = "verdict no";
     $("verdict").innerHTML = `<div><b>Couldn't read that file</b><p>${e.message}</p></div>`;
     $("rules").innerHTML = "";
     $("sizePanel").classList.add("hidden");
     $("dlZip").disabled = true;
+    $("dlBackup").disabled = true;
     $("report").classList.remove("hidden");
   } finally {
     drop.classList.remove("busy");
@@ -1304,13 +1580,21 @@ $("dlZip").addEventListener("click", async () => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
+$("dlBackup").addEventListener("click", () => {
+  if (!built || !built.backup || !built.backup.data) return;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([built.backup.data], { type: "image/jpeg" }));
+  a.download = `${$("adName").value.trim() || built.name}_${built.ctx.width}x${built.ctx.height}.jpg`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
 
 /* ========================================================================== *
  * INSPECT TAB — audits a package that already exists, whoever built it, and
  * lets you scrub the animation. Entirely separate from the convert pipeline
  * above; it reads what is in the file rather than rebuilding anything.
  * ========================================================================== */
-const BUILD = "2026-10-23";
+const BUILD = "2026-10-26";
 $("build").textContent = "build " + BUILD;
 $("ispecline").textContent = $("specline").textContent;
 

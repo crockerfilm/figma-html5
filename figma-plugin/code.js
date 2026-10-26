@@ -1385,6 +1385,16 @@ const isExportCopy = n => { try { return !!n.getPluginData(EXPORT_COPY); } catch
 // Copies left on the page by an export that was cut short.
 const leftoverCopies = () => figma.currentPage.children.filter(isExportCopy).map(n => n.id);
 const SIZE_NAME = /^\s*(\d{2,4})\s*[x×X]\s*(\d{2,4})\s*$/;
+// The version a banner belongs to: the nearest frame above it not named by a
+// size, so a 320x100 wrapped in its own 320x100 frame still belongs to it. Its
+// id tells apart two version frames that share a name.
+function versionOf(b) {
+  try {
+    for (let p = b.parent; p && p.type !== "PAGE" && p.type !== "DOCUMENT"; p = p.parent)
+      if (!SIZE_NAME.test(String(p.name))) return { versionId: p.id, versionName: p.name };
+  } catch (e) { /* the layer changed while reading */ }
+  return { versionId: "", versionName: "" };
+}
 async function scanExportPage(seq) {
   const page = await walkPage(seq, "Looking for banners on this page");
   if (!page) return;
@@ -1411,12 +1421,12 @@ async function scanExportPage(seq) {
   for (const [i, b] of found.entries()) {
     if (i % 10 === 0) { await pause(`Reading banner ${i + 1} of ${found.length}`); if (stale(seq)) return; }
     const up = page.ancestors(b).next().value || "";   // the frame it sits in, which groups it
-    list.push({ id: b.id, name: b.name, where: where(b), group: up, x: Math.round(b.x), y: Math.round(b.y),
+    list.push(Object.assign({ id: b.id, name: b.name, where: where(b), group: up, x: Math.round(b.x), y: Math.round(b.y),
                 w: Math.round(b.width), h: Math.round(b.height), hidden: !page.shown(b),
-                animated: (hasMotion(b) ? 1 : 0) + safeFindAll(b, hasMotion).length });
+                animated: (hasMotion(b) ? 1 : 0) + safeFindAll(b, hasMotion).length }, versionOf(b)));
   }
   if (stale(seq)) return;
-  post({ type: "plan", mode, auto: true, offSize, banners: list, leftovers: leftoverCopies() });
+  post({ type: "plan", mode, auto: true, offSize, banners: list, leftovers: leftoverCopies(), delivery: readDelivery() });
 }
 
 async function scanExport(seq, sel) {
@@ -1429,12 +1439,12 @@ async function scanExport(seq, sel) {
     if (i % 10 === 0) { await pause(`Reading banner ${i + 1} of ${banners.length}`); if (stale(seq)) return; }
     let up = "";
     try { up = b.parent ? b.parent.id : ""; } catch (e) { /* grouped by name instead */ }
-    list.push({ id: b.id, name: b.name, where: where(b), group: up, x: Math.round(b.x), y: Math.round(b.y),
+    list.push(Object.assign({ id: b.id, name: b.name, where: where(b), group: up, x: Math.round(b.x), y: Math.round(b.y),
                 w: Math.round(b.width), h: Math.round(b.height),
-                animated: (hasMotion(b) ? 1 : 0) + safeFindAll(b, hasMotion).length });
+                animated: (hasMotion(b) ? 1 : 0) + safeFindAll(b, hasMotion).length }, versionOf(b)));
   }
   if (stale(seq)) return;
-  post({ type: "plan", mode, banners: list, leftovers: leftoverCopies() });
+  post({ type: "plan", mode, banners: list, leftovers: leftoverCopies(), delivery: readDelivery() });
 }
 
 // Easing can be a motion variable; the panel can't read variables, so resolve
@@ -1744,13 +1754,41 @@ figma.ui.onmessage = msg => {
   if (msg.type === "stop") stopRequested = true;
   // The gallery wants a bigger window; the panel asks, the plugin resizes.
   if (msg.type === "resize") figma.ui.resize(Math.round(msg.w), Math.round(msg.h));
+  // The delivery folders setup lives in the file, so whoever opens it gets the
+  // same channels and codes; if the file can't be written, this person keeps it.
+  if (msg.type === "saveDelivery") {
+    // A change, merged into what the file holds now, so two people editing the
+    // setup at once don't overwrite each other's codes.
+    const cur = readDelivery() || { on: false, prefix: "", versions: {} };
+    const p = msg.patch || {};
+    if ("on" in p) cur.on = !!p.on;
+    if ("prefix" in p) cur.prefix = String(p.prefix || "");
+    if (p.version) {
+      cur.versions = cur.versions || {};
+      cur.versions[p.version.id] = { code: String(p.version.code || ""), name: String(p.version.name || "") };
+    }
+    delivery = cur;
+    const json = JSON.stringify(cur);
+    try { figma.root.setPluginData(DELIVERY, json); }
+    catch (e) { figma.clientStorage.setAsync(DELIVERY, json).catch(() => { /* this session only */ }); }
+  }
   if (msg.type === "ready") postHistory();
   if (msg.type === "focus") {
     figma.getNodeByIdAsync(msg.id).then(n => { if (n) figma.viewport.scrollAndZoomIntoView([n]); });
   }
 };
 postHistory();
+const DELIVERY = "copyMotion.delivery";
+let delivery = null;
+// The setup as the file holds it now (or, where the file can't be written,
+// this person's copy).
+function readDelivery() {
+  try { const v = figma.root.getPluginData(DELIVERY); if (v) return JSON.parse(v); } catch (e) { /* fall back */ }
+  return delivery;
+}
 Promise.resolve()
   .then(() => figma.clientStorage.getAsync("exportAll"))
   .then(v => { exportAll = !!v; }, () => { /* not remembered; default off */ })
-  .then(() => { post({ type: "settings", exportAll }); runScan(); });
+  .then(() => { try { return figma.root.getPluginData(DELIVERY) || figma.clientStorage.getAsync(DELIVERY); } catch (e) { return figma.clientStorage.getAsync(DELIVERY); } })
+  .then(v => { try { delivery = v ? JSON.parse(v) : null; } catch (e) { delivery = null; } }, () => { /* none saved */ })
+  .then(() => { post({ type: "settings", exportAll, delivery }); runScan(); });

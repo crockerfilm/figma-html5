@@ -89,8 +89,13 @@ web, no external anything. Ticking *Outline text* covers the font half of this.
 - Realigns diamond/angular gradients, which Figma exports offset from the shape they
   fill, slicing the artwork
 - Strips any scripts from the artwork
+- Leaves out images that never show (stacked under another image, or only shaping a mask):
+  each is checked by drawing the banner through its animation without it, and goes only
+  if nothing on screen changes
 - Sizes each embedded image independently against measured bytes until the package fits,
   choosing JPEG or PNG from whether that image's own pixels actually use transparency
+- Makes the backup image ad servers want beside the zip: the end frame as a JPEG under
+  50 KB (**Download backup .jpg**)
 - Ships images as separate files at the package root rather than base64, avoiding a 33%
   size penalty and any question of whether a validator walks subfolders
 

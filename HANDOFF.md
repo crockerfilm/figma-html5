@@ -115,9 +115,24 @@ expensive work happens.
    `0.00499251` that do not survive rounding.
 4. Decode each **distinct** image once (deduplicated by data-URI), detect alpha from
    actual pixels, resolve how large it is drawn.
-5. Measure the markup cost **before touching images**.
-6. Allocate the image budget, encode, package, zip.
-7. Append `weight` / `sharpness` / `format` results.
+5. `removeHiddenImages` — leave out images that never show. The banner is drawn as an
+   SVG image (`frameCanvas`, a `data:` URL) at `sampleTimes` — the moments the signed-off
+   delivery was checked at: every 0.1 s of the motion and 0.5 s into the hold, every 2 s of
+   the hold, four points of the fade, and the final frame — with all animations paused `t`
+   seconds in. Valid only when every animation is a shorthand starting at 0 s on one clock
+   (`whyNoFreeze`, `sharesOneClock`; true after `applyLoop`). A control render with every
+   image removed must differ, or the browser didn't draw the images and nothing is removed. Each
+   image, largest first, is removed (or, if opaque, replaced by a white rect: the
+   mask-outline case) against 160 px copies of every image, and the removal is kept only if
+   no frame differs from the original by more than 3 levels. Trials are cumulative and
+   always compared with the original, so two layers hiding each other can't both go. If the
+   frames can't be read back, nothing is removed and the result says so.
+6. Measure the markup cost **before touching images**.
+7. Allocate the image budget, encode, package, zip (`fitAt`); if a photo ends up below its
+   drawn size at `jpegQuality`, retry once at `jpegQualityFloor` and keep it if fewer are.
+8. Append `hidden` / `weight` / `sharpness` / `format` results. `run()` also returns
+   `timing` (one play, hold, fade, total), which `makeBackup(out)` uses to draw the end
+   frame (after the last play) as a JPEG within `SPEC.maxBackupBytes`.
 
 ---
 
@@ -376,9 +391,21 @@ Development → Import plugin from manifest → `figma-plugin/manifest.json`. Us
   750 KB (the media BOM); it is now Google's 150 KB (see section 6).
 - **Hidden images cost weight:** 48 of 59 banners in one delivery carried images that never show
   (copy variants stacked under the visible photo, or a photo used only as a mask shape).
-  Removing them let nearly every visible image ship at 2× inside 150 KB. For that delivery
-  this was done outside the tool, proving each removal pixel-identical at 44 points in the
-  timeline; the tool doesn't do it yet, so hide or delete unused layers in Figma.
+  Removing them let nearly every visible image ship at 2× inside 150 KB. The converter now
+  does this itself (pipeline step 5); it reproduced the hand-verified delivery (55 of 59
+  pixel-identical, the rest within 8/255 at a few edge pixels).
+- **Backups and delivery folders (2026-10-23):** every banner that passes gets a backup
+  JPG (`Converter.makeBackup`) shown in the preview and saved beside its zip. The optional
+  **Delivery folders** panel (`deliveryPanel`, `deliveryPlan`, `deliveryPicks`) lays the
+  download out as `<prefix>_HTML5_<date>/<prefix>_<code>/<prefix>_<code>_<WxH>.zip|.jpg`, one
+  of each size — the layout of the delivery the client signed off (channel folders were
+  dropped at their request). Versions are keyed by the id of the nearest frame above the
+  banner not named by a size (`versionOf` in code.js), so a 320x100 wrapped in its own frame
+  still belongs to its version and two version frames sharing a name stay apart; a frame
+  named for a size but 1–2 px off matches by its name. The setup is stored in the file
+  (`figma.root` plugin data `copyMotion.delivery`, clientStorage if the file can't be
+  written), sent with every banner list, and saved as small patches merged in code.js, so
+  two people editing at once don't overwrite each other.
 - **Sharing with the team:** zip `manifest.json`, `code.js`, `ui.html` and `README.md` from
   `figma-plugin/` into a folder called `Copy Motion` (the zip is attached to each GitHub
   release). Teammates import `manifest.json` once in the Figma desktop app; for an update

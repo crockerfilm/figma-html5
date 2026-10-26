@@ -70,14 +70,30 @@ mockups, say). **Build and
 check** exports each banner from Figma, rebuilds its Motion animation as CSS, then runs the
 web tool's own checks and packaging. Click a built banner to preview it with a scrubber and
 *End frame*. **Download** gives one zip: a zip per banner that passed, named
-`<version>_<first words of the headline>_<WxH>.zip`, plus `report.csv` (file, full path,
-headline, size, KB, length, notes). Banners that don't meet spec are left out, as on the
-web tool.
+`<version>_<first words of the headline>_<WxH>.zip`, with its **backup .jpg** beside it
+(same name), plus `report.csv` (file, full path, headline, size, KB, length, notes).
+Banners that don't meet spec are left out, as on the web tool.
+
+**Backup image:** each banner that passes gets one: its end frame as a JPEG under 50 KB, at
+the best quality that fits. It's shown under the preview and goes beside the zip, not in it.
+
+**Delivery folders** (optional, under the plays): lay the download out as a delivery. Tick
+**Organise the download**, set a **name prefix** (e.g. `CLIENT24`) and give each
+**version** — the frame the banners sit in, like *Version B* — a **code** (`1B`). A version
+with no code is left out, and so is any banner you untick (a size that wasn't ordered). The
+download is then `<prefix>_HTML5_<date>/<prefix>_<code>/<prefix>_<code>_<WxH>.zip` with its
+`.jpg` beside it, one of each size, and each zip's page title set to its file name. The panel
+says beforehand what it will make and what's left out; the report is offered separately so
+the zip can go to the client as it is. The codes are saved in the Figma file, so anyone who
+opens it gets the same setup.
 
 **Images and weight:** photos are packed at up to 2× the size they're drawn at, so they
 stay sharp on Retina screens, and step down only if a banner would go over 150 KB (Google's
-limit, leaving 50 KB for the backup JPG). Every image in the frame counts, including ones
-hidden under other layers, so delete layers that never show.
+limit, leaving 50 KB for the backup JPG); a photo that would drop below the size it's drawn
+at is encoded a little harder instead (JPEG quality 72). **Images that never show** —
+copy variants stacked under the visible photo, or a photo used only as a mask's outline —
+are left out automatically: each is checked by drawing the banner through its animation
+without it, and goes only if nothing on screen changes. The banner's checks say how many.
 
 **Size fixes:** an export must be exactly its frame's size. On the export copy only (your
 frame is never changed), the plugin clips anything past the frame's edge and drops the

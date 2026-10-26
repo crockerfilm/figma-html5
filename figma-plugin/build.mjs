@@ -24,7 +24,7 @@ if (!src.includes(slot)) throw new Error(`src/ui.html is missing the ${slot} pla
 // Wrapped so the web tool's names can't collide with the panel's own.
 const inlined = `const Converter = (() => {
 ${converter}
-return { run, SPEC, makeZip, kb, fmt, matMul, matInvert, parseTransform };
+return { run, SPEC, makeZip, makeBackup, kb, fmt, matMul, matInvert, parseTransform };
 })();`;
 
 writeFileSync(join(here, "ui.html"),

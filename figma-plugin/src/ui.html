@@ -1090,6 +1090,187 @@ function exportAllToggle() {
 
 const slug = s => String(s).replace(/×/g, "x").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "banner";
 
+/* ------------------------------------------------------ delivery folders -- */
+// Optional: the download laid out as a delivery. One folder per version,
+// <prefix>_<code>, holding one of each size as <prefix>_<code>_<WxH>.zip with its
+// backup .jpg beside it. The codes are saved in the Figma file, so whoever opens
+// it exports the same layout.
+let delivery = { on: false, prefix: "", versions: {} };
+const SIZE = /^\d+\s*[x×X]\s*\d+$/;
+const sizeKey = s => String(s).replace(/[×X]/g, "x").replace(/\s+/g, "");
+// The size a banner exports at: the one its name promises (a frame a pixel or
+// two off is exported at its named size), else its own.
+const bannerSize = b => SIZE.test(String(b.name || "").trim()) ? sizeKey(String(b.name).trim()) : `${b.w}x${b.h}`;
+// The version a banner belongs to, from the plugin (the nearest frame above it
+// not named by a size). Without one, its path stands in.
+function versionOf(b) {
+  if (b.versionId) return { id: b.versionId, name: b.versionName || "" };
+  const parts = String(b.where || "").split(" › ").filter(Boolean);
+  while (parts.length > 1 && SIZE.test(parts[parts.length - 1].trim())) parts.pop();
+  const k = parts.join(" › ") || "(this page)";
+  return { id: k, name: parts[parts.length - 1] || k };
+}
+const codeOf = id => { const c = ((delivery.versions || {})[id] || {}).code; return c ? slug(c) : ""; };
+const prefixed = s => (delivery.prefix ? slug(delivery.prefix) + "_" : "") + s;
+// The date the person sees, not UTC's.
+const localDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+function useDelivery(d) {
+  if (d && typeof d === "object") delivery = { on: !!d.on, prefix: String(d.prefix || ""), versions: Object.assign({}, d.versions || {}) };
+}
+
+// Each change goes to the file on its own (a code, the prefix, on/off), merged
+// there into what the file holds, so two people editing don't overwrite each
+// other. Pending changes are sent if the plugin closes.
+const pendingSaves = new Map();
+function saveDelivery(key, patch) {
+  const old = pendingSaves.get(key);
+  if (old) clearTimeout(old.timer);
+  pendingSaves.set(key, { patch, timer: setTimeout(() => flushSave(key), 300) });
+}
+function flushSave(key) {
+  const p = pendingSaves.get(key);
+  if (!p) return;
+  clearTimeout(p.timer); pendingSaves.delete(key);
+  parent.postMessage({ pluginMessage: { type: "saveDelivery", patch: p.patch } }, "*");
+}
+window.addEventListener("pagehide", () => [...pendingSaves.keys()].forEach(flushSave));
+window.addEventListener("beforeunload", () => [...pendingSaves.keys()].forEach(flushSave));
+
+// What the setup makes from a banner list: per file (code + size, matched without
+// regard to case, since Finder and Windows don't tell them apart), the banners
+// that could fill it.
+function deliveryPlan(banners) {
+  const versions = new Map();
+  for (const b of banners) {
+    const v = versionOf(b);
+    if (!versions.has(v.id)) versions.set(v.id, { name: v.name, items: [] });
+    versions.get(v.id).items.push(b);
+  }
+  const files = new Map(), spelling = new Map(), uncoded = [];
+  for (const [id, v] of versions) {
+    let code = codeOf(id);
+    if (!code) { uncoded.push(...v.items); continue; }
+    code = spelling.get(code.toLowerCase()) || (spelling.set(code.toLowerCase(), code), code);
+    for (const b of v.items) {
+      const size = bannerSize(b), key = `${code}|${size}`.toLowerCase();
+      if (!files.has(key)) files.set(key, { code, size, candidates: [] });
+      files.get(key).candidates.push({ b, version: id });
+    }
+  }
+  return { versions, files: [...files.values()], uncoded };
+}
+// Which banner fills each file: the first ticked one that was built and passed.
+function deliveryPicks(ticked) {
+  const plan = deliveryPlan(exportPlan);
+  const out = [], left = [], placed = new Set();
+  for (const f of plan.files) {
+    const usable = f.candidates.filter(c => ticked.has(c.b.id) && built.has(c.b.id) && built.get(c.b.id).ok);
+    const stem = prefixed(`${f.code}_${f.size}`);
+    if (!usable.length) {
+      const c = f.candidates.find(c => ticked.has(c.b.id));
+      left.push(`${stem} (${!c ? "not ticked" : !built.has(c.b.id) ? "not built" : "not to spec"})`);
+      continue;
+    }
+    const versionsUsed = new Set(usable.map(c => c.version));
+    out.push({ stem, folder: prefixed(f.code), size: f.size, id: usable[0].b.id,
+               clash: versionsUsed.size > 1, twice: usable.length > 1 });
+    placed.add(usable[0].b.id);
+  }
+  return { plan, out, left, placed };
+}
+
+function deliveryPanel() {
+  const box = el("details", "xopts");
+  box.id = "xdelivery";
+  box.style.cssText = "display:block;margin-top:8px";
+  const sum = el("summary", null, "");
+  sum.style.cursor = "pointer";
+  box.appendChild(sum);
+  const body = el("div");
+  body.style.cssText = "display:flex;flex-direction:column;gap:6px;margin-top:6px";
+  box.appendChild(body);
+  const field = "font-size:11px;font-family:inherit;padding:3px 5px;border:1px solid var(--figma-color-border,#c7c7c7);border-radius:3px;background:var(--figma-color-bg,#fff);color:var(--figma-color-text,#000)";
+
+  const onLab = el("label");
+  onLab.style.cssText = "display:flex;gap:6px;align-items:center;margin:0;cursor:pointer";
+  const on = el("input"); on.type = "checkbox"; on.checked = delivery.on; on.style.margin = "0";
+  onLab.appendChild(on);
+  onLab.appendChild(el("span", null, "Organise the download: a folder per version, one of each size, each zip with its backup .jpg"));
+  body.appendChild(onLab);
+
+  const prefLab = el("label");
+  prefLab.style.cssText = "display:flex;gap:6px;align-items:center;margin:0";
+  prefLab.appendChild(el("span", null, "Name prefix"));
+  const pref = el("input"); pref.type = "text"; pref.value = delivery.prefix; pref.placeholder = "e.g. CLIENT24"; pref.style.cssText = field + ";width:100px";
+  prefLab.appendChild(pref);
+  const example = el("span", "muted");
+  prefLab.appendChild(example);
+  body.appendChild(prefLab);
+
+  body.appendChild(el("div", "muted", "A code for each version goes in its folder and file names. Leave it empty to leave that version out."));
+  const vlist = el("div");
+  vlist.style.cssText = "display:flex;flex-direction:column;gap:2px";
+  body.appendChild(vlist);
+  const check = el("div", "muted");
+  check.style.cssText = "font-size:11px;display:flex;flex-direction:column;gap:3px";
+  body.appendChild(check);
+
+  const plan = deliveryPlan(exportPlan);
+  const sameName = new Map();
+  for (const [, v] of plan.versions) sameName.set(v.name, (sameName.get(v.name) || 0) + 1);
+  const seen = new Map();
+  for (const [id, v] of plan.versions) {
+    const row = el("div");
+    row.style.cssText = "display:flex;gap:6px;align-items:center;padding:3px 0;border-top:1px solid var(--figma-color-border,#e5e5e5)";
+    let label = v.name || "(this page)";
+    if (sameName.get(v.name) > 1) { const k = (seen.get(v.name) || 0) + 1; seen.set(v.name, k); label += ` (${k} of ${sameName.get(v.name)})`; }
+    const name = el("span", null, label);
+    name.title = String((v.items[0] || {}).where || label);
+    name.style.cssText = "min-width:110px;font-weight:600";
+    row.appendChild(name);
+    const code = el("input"); code.type = "text"; code.value = (delivery.versions[id] || {}).code || ""; code.placeholder = "code"; code.style.cssText = field + ";width:52px";
+    code.addEventListener("input", () => {
+      delivery.versions[id] = { code: code.value.trim(), name: v.name };
+      saveDelivery(`v:${id}`, { version: { id, code: code.value.trim(), name: v.name } });
+      deliverySummary();
+    });
+    row.appendChild(code);
+    row.appendChild(el("span", "muted", `${v.items.length} size${v.items.length === 1 ? "" : "s"}`));
+    vlist.appendChild(row);
+  }
+  on.addEventListener("change", () => { delivery.on = on.checked; saveDelivery("on", { on: on.checked }); deliverySummary(); exportButton(); });
+  pref.addEventListener("input", () => { delivery.prefix = pref.value.trim(); saveDelivery("prefix", { prefix: pref.value.trim() }); deliverySummary(); });
+  box._parts = { sum, check, example };
+  box.open = delivery.on && !Object.values(delivery.versions).some(v => v && v.code);
+  return box;
+}
+// The panel's one-line summary and its notes, from the codes and the ticks.
+function deliverySummary() {
+  const box = document.getElementById("xdelivery");
+  if (!box || !box._parts) return;
+  const { sum, check, example } = box._parts;
+  example.textContent = `→ ${prefixed("1B")}/${prefixed("1B_300x250")}.zip`;
+  const ticked = new Set([...out.querySelectorAll("input.xb:checked")].map(c => c.dataset.id));
+  const plan = deliveryPlan(exportPlan);
+  const wanted = plan.files.filter(f => f.candidates.some(c => ticked.has(c.b.id)));
+  const folders = new Set(wanted.map(f => f.code.toLowerCase())).size;
+  sum.textContent = delivery.on
+    ? `Delivery folders: ${folders} folder${folders === 1 ? "" : "s"}, ${wanted.length} banner${wanted.length === 1 ? "" : "s"}`
+    : "Delivery folders: off — one flat zip";
+  check.innerHTML = "";
+  if (!delivery.on) return;
+  if (!plan.files.length) { check.appendChild(el("div", "warn", "Give at least one version a code.")); return; }
+  check.appendChild(el("div", null, `Makes ${wanted.length} banner${wanted.length === 1 ? "" : "s"} in ${folders} folder${folders === 1 ? "" : "s"}, each with its backup .jpg.`));
+  const clash = plan.files.filter(f => new Set(f.candidates.filter(c => ticked.has(c.b.id)).map(c => c.version)).size > 1);
+  if (clash.length) check.appendChild(el("div", "warn", `Two versions share a code, so these would get the same file name (the first is used): ${clash.map(f => prefixed(`${f.code}_${f.size}`)).join(", ")}.`));
+  const twice = plan.files.filter(f => f.candidates.filter(c => ticked.has(c.b.id)).length > 1 && !clash.includes(f));
+  if (twice.length) check.appendChild(el("div", "warn", `More than one banner of the same size in a version (the first that passes is used): ${twice.map(f => prefixed(`${f.code}_${f.size}`)).join(", ")}.`));
+  const unticked = plan.files.filter(f => !f.candidates.some(c => ticked.has(c.b.id)));
+  if (unticked.length) check.appendChild(el("div", null, `Not ticked, so left out: ${unticked.map(f => prefixed(`${f.code}_${f.size}`)).join(", ")}.`));
+  const uncoded = plan.uncoded.filter(b => ticked.has(b.id));
+  if (uncoded.length) check.appendChild(el("div", null, `${uncoded.length} ticked banner${uncoded.length === 1 ? " is" : "s are"} in a version with no code, so left out.`));
+}
+
 function exportButton() {
   out.querySelectorAll("input.xg").forEach(g => {
     const rows = [...out.querySelectorAll(`input.xb[data-group="${g.dataset.group}"]`)];
@@ -1100,6 +1281,7 @@ function exportButton() {
   const pa = document.getElementById("previewAll");
   if (pa) { pa.classList.toggle("hidden", !built.size); pa.textContent = `Preview all ${built.size}`; }
   updateSummary();
+  deliverySummary();
   const picked = [...out.querySelectorAll("input.xb:checked")];
   const ready = [...built.values()].filter(b => b.ok).length;
   go.classList.remove("danger");
@@ -1108,8 +1290,11 @@ function exportButton() {
   // passed — one failure mustn't hold back the rest. Ticking another unbuilt
   // banner switches it back to building.
   if (picked.length && picked.every(c => built.has(c.dataset.id))) {
-    go.disabled = !ready;
-    go.textContent = ready ? `Download ${ready} banner${ready === 1 ? "" : "s"} (.zip)` : "Nothing passed — see why below";
+    // In the delivery layout, what goes in is what the codes place.
+    const placed = delivery.on ? deliveryPicks(new Set(picked.map(c => c.dataset.id))).out.length : ready;
+    go.disabled = !placed;
+    go.textContent = placed ? `Download ${placed} banner${placed === 1 ? "" : "s"} (.zip)`
+      : ready ? "Give a version a code to download" : "Nothing passed — see why below";
     go.dataset.action = "download";
   } else {
     const todo = picked.filter(c => !built.has(c.dataset.id)).length;
@@ -1149,6 +1334,7 @@ function exportGroups(banners) {
 
 function renderExport(msg) {
   if (document.getElementById("gallery")) closeGallery();
+  useDelivery(msg.delivery);   // the setup as the file holds it now
   // A new selection is a new export: earlier builds may be out of date.
   const groups = exportGroups(msg.banners);
   exportPlan = groups.flatMap(g => g.items);
@@ -1244,6 +1430,7 @@ function renderExport(msg) {
   opts.appendChild(fadeLab);
   sync();
   card.appendChild(opts);
+  card.appendChild(deliveryPanel());
 
   // Rows, grouped under where they sit. Every group usually shares the same
   // long board name, so the heading leaves that off and shows what differs.
@@ -1405,6 +1592,16 @@ async function buildOne(b) {
       todo: "This is a plugin problem, not your file. Open Technical details below and send its contents to whoever maintains the plugin." });
   }
   const ok = !outp.blocked && !outp.results.some(r => r.status === "block");
+  // The backup image that goes beside the zip: the end frame as a JPEG.
+  let backup = null;
+  if (ok) {
+    setStatus(b.id, "Making the backup image…");
+    backup = await Converter.makeBackup(outp);
+    const backupRule = { id: "backup", title: "Backup image" };
+    outp.results.push(backup.data
+      ? { rule: backupRule, status: "pass", detail: `${Converter.kb(backup.bytes)} JPEG of the end frame, to go beside the zip.` }
+      : { rule: backupRule, status: "warn", detail: `No backup image: ${backup.error}` });
+  }
   // What the plugin received, for diagnosing a conversion that went wrong —
   // the keyframes and what came of them, without the (huge) SVG.
   const details = JSON.stringify({ banner: `${payload.where} › ${payload.name}`, converted: anim.animatedLayers, notes: anim.notes,
@@ -1419,7 +1616,7 @@ async function buildOne(b) {
   const total = loops ? anim.duration : plays * anim.duration + (plays - 1) * between;
   // What a preview covers: a looping banner's whole cycle (play, pause, fade).
   const span = loops ? anim.duration + exportLoop.pause + exportLoop.fade : total;
-  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, span, onePlay: anim.duration, loops, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
+  return { picked: true, ok, out: outp, backup, notes: anim.notes, duration: total, span, onePlay: anim.duration, loops, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
 }
 
 async function buildAll() {
@@ -1536,6 +1733,15 @@ function showBanner(id) {
   pv.appendChild(el("div", "muted", b.loops
     ? "Loops forever; this plays one loop. Check the jump from the end back to the start looks clean — fading everything out at the end of the timeline avoids a jump."
     : "Check the end frame shows the call to action — the ad stops there."));
+  if (b.backup && b.backup.data) {
+    const cap = el("div", "muted", `Backup image (${Converter.kb(b.backup.bytes)} JPEG, goes beside the zip):`);
+    cap.style.marginTop = "8px";
+    pv.appendChild(cap);
+    const im = document.createElement("img");
+    im.src = URL.createObjectURL(new Blob([b.backup.data], { type: "image/jpeg" }));
+    im.style.cssText = `display:block;width:${Math.round(W * scale)}px;height:${Math.round(H * scale)}px;margin-top:4px;border:1px solid var(--figma-color-border)`;
+    pv.appendChild(im);
+  }
   }
 
   const checks = el("details");
@@ -1693,28 +1899,79 @@ function renderGallery() {
   g.appendChild(grid);
 }
 
+// A banner's zip, with its <title> set to the file's name when the delivery
+// layout names it (the build used the Figma frame's name).
+async function bannerZip(b, title) {
+  const files = title ? b.out.chosen.files.map(f => f.name !== "index.html" ? f
+    : { name: f.name, data: new TextEncoder().encode(new TextDecoder().decode(f.data).replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`)) })
+    : b.out.chosen.files;
+  return new Uint8Array(await (await Converter.makeZip(files)).arrayBuffer());
+}
+
 async function downloadAll() {
   const ticked = new Set([...out.querySelectorAll("input.xb:checked")].map(c => c.dataset.id));
-  const entries = [...built.entries()].filter(([id]) => ticked.has(id)).map(([, b]) => b);
+  const pairs = [...built.entries()].filter(([id]) => ticked.has(id));
+  const entries = pairs.map(([, b]) => b);
   const files = [], used = new Set(), csv = [["file", "banner", "where", "headline", "size", "status", "kb", "seconds", "notes"]];
-  for (const b of entries) {
-    const name = b.payload ? b.payload.name : "?";
-    const headline = b.payload ? b.payload.headline || "" : "";
-    if (!b.ok) { csv.push(["", name, b.payload ? b.payload.where : "", headline, b.payload ? `${b.payload.width}x${b.payload.height}` : "", b.error ? "error" : "not to spec", "", "", b.error || b.out.results.filter(r => r.status === "block").map(r => r.detail).join(" | ")]); continue; }
-    const inner = await Converter.makeZip(b.out.chosen.files);
-    let fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}`, k = 2;
-    while (used.has(fn)) fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}-${k++}`;
-    used.add(fn);
-    files.push({ name: `${fn}.zip`, data: new Uint8Array(await inner.arrayBuffer()) });
-    // Everything worth knowing about a banner that passed: automatic size fixes
-    // and motion that couldn't be carried across, both from its checks.
-    const notes = b.out.results.filter(r => r.status === "warn" || r.status === "fixed").map(r => r.detail);
-    csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), b.loops ? `${n3(b.duration)} per play, loops forever` : n3(b.duration), notes.join(" | ")]);
+  const date = localDate();
+  const notesOf = b => b.out.results.filter(r => r.status === "warn" || r.status === "fixed").map(r => r.detail);
+  const seconds = b => b.loops ? `${n3(b.duration)} per play, loops forever` : n3(b.duration);
+  let fileName, folders = 0, missing = [], unplaced = [], noBackup = 0, notes = [];
+  const layout = delivery.on;
+  if (layout) {
+    // One file per version code and size, filled by the first ticked banner that
+    // passed. The report keeps what was left out, and why.
+    const picks = deliveryPicks(ticked);
+    if (!picks.out.length) {
+      result.innerHTML = "";
+      result.appendChild(el("div", "card warn", "Nothing to download: no ticked banner that passed belongs to a version with a code. Give the versions their codes under Delivery folders."));
+      return;
+    }
+    const root = prefixed(`HTML5_${date}`);
+    const inFolder = new Set();
+    for (const p of picks.out) {
+      const b = built.get(p.id);
+      const zipData = await bannerZip(b, p.stem);
+      files.push({ name: `${root}/${p.folder}/${p.stem}.zip`, data: zipData });
+      if (b.backup && b.backup.data) files.push({ name: `${root}/${p.folder}/${p.stem}.jpg`, data: b.backup.data });
+      else noBackup++;
+      inFolder.add(p.folder);
+      if (p.clash) notes.push(`${p.stem}: two versions share its code; the first was used`);
+      else if (p.twice) notes.push(`${p.stem}: more than one banner of this size in its version; the first that passed was used`);
+      csv.push([`${p.folder}/${p.stem}.zip`, b.payload.name, b.payload.where, b.payload.headline || "", p.size, "ready", (zipData.length / 1024).toFixed(1), seconds(b), notesOf(b).join(" | ")]);
+    }
+    missing = picks.left;
+    for (const [id, b] of pairs) if (b.ok && !picks.placed.has(id)) unplaced.push(`${b.payload.where} › ${b.payload.name}`);
+    for (const m of missing) csv.push(["", "", "", "", "", "left out", "", "", m]);
+    for (const n of notes) csv.push(["", "", "", "", "", "note", "", "", n]);
+    for (const u of unplaced) csv.push(["", u, "", "", "", "passed, but not placed (no code, or another banner fills its file)", "", "", ""]);
+    for (const b of entries) if (!b.ok) csv.push(["", b.payload ? b.payload.name : "?", b.payload ? b.payload.where : "", b.payload ? b.payload.headline || "" : "", b.payload ? `${b.payload.width}x${b.payload.height}` : "", b.error ? "error" : "not to spec", "", "", b.error || b.out.results.filter(r => r.status === "block").map(r => r.detail).join(" | ")]);
+    folders = inFolder.size;
+    fileName = `${root}.zip`;
+  } else {
+    for (const b of entries) {
+      const name = b.payload ? b.payload.name : "?";
+      const headline = b.payload ? b.payload.headline || "" : "";
+      if (!b.ok) { csv.push(["", name, b.payload ? b.payload.where : "", headline, b.payload ? `${b.payload.width}x${b.payload.height}` : "", b.error ? "error" : "not to spec", "", "", b.error || b.out.results.filter(r => r.status === "block").map(r => r.detail).join(" | ")]); continue; }
+      let fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}`, k = 2;
+      while (used.has(fn)) fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}-${k++}`;
+      used.add(fn);
+      files.push({ name: `${fn}.zip`, data: await bannerZip(b) });
+      // The backup goes beside the zip with the same name, as ad servers expect.
+      if (b.backup && b.backup.data) files.push({ name: `${fn}.jpg`, data: b.backup.data });
+      else noBackup++;
+      // Everything worth knowing about a banner that passed: automatic size fixes
+      // and motion that couldn't be carried across, both from its checks.
+      csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), seconds(b), notesOf(b).join(" | ")]);
+    }
+    fileName = `html5-banners-${date}.zip`;
   }
   const esc = v => `"${String(v).replace(/"/g, '""')}"`;
-  files.push({ name: "report.csv", data: new TextEncoder().encode(csv.map(r => r.map(esc).join(",")).join("\n")) });
+  const report = new TextEncoder().encode(csv.map(r => r.map(esc).join(",")).join("\n"));
+  // In the delivery layout the report stays out of the zip, so the zip can go
+  // to the client as it is; it's offered separately below.
+  if (!layout) files.push({ name: "report.csv", data: report });
   const zip = await Converter.makeZip(files);
-  const fileName = `html5-banners-${new Date().toISOString().slice(0, 10)}.zip`;
   const url = URL.createObjectURL(zip);
   // Figma's plugin frame can block a download started from code after a
   // wait, so the file is also offered as a link to click — a direct click on
@@ -1726,14 +1983,27 @@ async function downloadAll() {
   auto.remove();
   result.innerHTML = "";
   const card = el("div", "card");
-  const left = entries.length - (files.length - 1);
-  card.appendChild(el("div", "ok", `${files.length - 1} banner${files.length - 1 === 1 ? "" : "s"} packaged, with a report.csv.`));
+  const zips = files.filter(f => f.name.endsWith(".zip")).length, jpgs = files.filter(f => f.name.endsWith(".jpg")).length;
+  const notReady = entries.filter(b => !b.ok).length;
+  card.appendChild(el("div", "ok", layout
+    ? `${zips} banner${zips === 1 ? "" : "s"} in ${folders} folder${folders === 1 ? "" : "s"}${noBackup ? `, ${jpgs} with a backup .jpg` : ", each with its backup .jpg"}.`
+    : `${zips} banner${zips === 1 ? "" : "s"} packaged, ${jpgs} with a backup .jpg beside it, with a report.csv.`));
   const save = el("a", null, `Save ${fileName} (${Converter.fmt(zip.size)})`);
   save.href = url; save.download = fileName;
   save.style.cssText = "display:inline-block;margin-top:6px;font-weight:600;color:var(--figma-color-text-brand)";
   card.appendChild(save);
   card.appendChild(el("div", "muted", "It saves to your Downloads folder. If nothing appeared there, click the link above."));
-  if (left) card.appendChild(el("div", "warn", `${left} banner${left === 1 ? " was" : "s were"} left out because ${left === 1 ? "it isn't" : "they aren't"} to spec — see the report.`));
+  if (layout) {
+    const rep = el("a", null, "Save the report (.csv)");
+    rep.href = URL.createObjectURL(new Blob([report], { type: "text/csv" })); rep.download = fileName.replace(/\.zip$/, "_report.csv");
+    rep.style.cssText = "display:inline-block;margin-top:4px;color:var(--figma-color-text-brand)";
+    card.appendChild(rep);
+  }
+  if (missing.length) card.appendChild(el("div", missing.some(m => !/not ticked\)$/.test(m)) ? "warn" : "muted", `Left out (${missing.length}): ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? ", …" : ""}.`));
+  if (notes.length) card.appendChild(el("div", "warn", notes.slice(0, 6).join(". ") + (notes.length > 6 ? ". …" : ".")));
+  if (unplaced.length) card.appendChild(el("div", "warn", `${unplaced.length} banner${unplaced.length === 1 ? " passed but isn't" : "s passed but aren't"} in the download (no code, or another banner fills the file) — see the report.`));
+  if (noBackup) card.appendChild(el("div", "warn", `${noBackup} banner${noBackup === 1 ? " has" : "s have"} no backup image — see each banner's checks.`));
+  if (notReady) card.appendChild(el("div", "warn", `${notReady} banner${notReady === 1 ? " was" : "s were"} left out because ${notReady === 1 ? "it isn't" : "they aren't"} to spec — see the report.`));
   result.appendChild(card);
 }
 
@@ -1803,7 +2073,10 @@ onmessage = ev => {
     count();
   }
   if (msg.type === "clearReview") renderClearReview(msg);
-  if (msg.type === "settings") exportAllOn = !!msg.exportAll;
+  if (msg.type === "settings") {
+    exportAllOn = !!msg.exportAll;
+    useDelivery(msg.delivery);
+  }
   // A new scan means the selection or page changed; a review would be stale.
   if (msg.type === "others" && msg.count === null) { const r = document.getElementById("review"); if (r) r.remove(); }
   if (msg.type === "history") {

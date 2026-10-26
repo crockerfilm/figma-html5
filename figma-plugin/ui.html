@@ -128,6 +128,8 @@ const SPEC = {
   requireOutlinedText: true,   // no font dependency at render time
   allowExternalRefs: false,    // creative must be self-contained
   jpegQuality: 0.8,
+  jpegQualityFloor: 0.72,      // tried when 0.8 would shrink a photo below the size it's drawn at
+  maxBackupBytes: 49000,       // the backup JPG beside each zip: under 50 KB, and zip + backup under 200 KB
 
   // Only formats the spec lists. An image's own pixels decide which it gets:
   // anything using alpha must keep it, everything else takes the smaller one.
@@ -736,6 +738,212 @@ function applyLoop(doc, plays, pause, fade = 0) {
   return { ok: true, timeline: T, faded, total: plays === Infinity ? Infinity : plays * T + (plays - 1) * (H + F) };
 }
 
+/* ------------------------------------------------------- frame render --- */
+// One moment of the banner as pixels. Every animation must run on one clock
+// (all start at 0s, as applyLoop leaves them), so pausing them all t seconds in
+// freezes exactly that moment. The SVG is drawn as an image, so it needs every
+// image inlined as a data: URI.
+const cssOf = doc => [...doc.querySelectorAll("style")].map(s => s.textContent)
+  .concat([...doc.querySelectorAll("[style]")].map(e => e.getAttribute("style") || "")).join("\n");
+// Frames can be frozen only when every animation is a plain "animation:"
+// shorthand: long-form properties, the -webkit- prefix and SMIL aren't timed by
+// the override in frameCanvas, and long form isn't read by runLength either.
+function whyNoFreeze(doc) {
+  if (doc.querySelector("animate, animateTransform, animateMotion, set")) return "it animates with SMIL tags";
+  const css = cssOf(doc);
+  if (/(^|[;{\s])(-webkit-)?animation-(name|duration|delay|iteration-count|direction|fill-mode)\s*:|-webkit-animation\s*:/.test(css))
+    return "its animation is written in long form";
+  return "";
+}
+// And to compare frames mid-run, everything must start at 0s on one clock.
+function sharesOneClock(doc) {
+  if (whyNoFreeze(doc)) return false;
+  for (const m of cssOf(doc).matchAll(/(?:^|[;{\s])animation\s*:\s*([^;}]+)/g))
+    for (const seg of splitAnimationsRaw(m[1])) if (parseAnimation(seg).times[1]) return false;
+  return true;
+}
+async function frameCanvas(svgText, t, w, h, background) {
+  const frozen = svgText.replace(/(<svg\b[^>]*>)/,
+    `$1<style>*{animation-play-state:paused!important;animation-delay:${-(+t.toFixed(3))}s!important}</style>`);
+  const img = await loadImage("data:image/svg+xml;charset=utf-8," + encodeURIComponent(frozen));
+  const c = document.createElement("canvas");
+  c.width = Math.round(w); c.height = Math.round(h);
+  // A default canvas, like the one the signed-off delivery was checked on: a
+  // read-optimised one draws edges a hair differently.
+  const x = c.getContext("2d");
+  if (background) { x.fillStyle = background; x.fillRect(0, 0, c.width, c.height); }
+  x.drawImage(img, 0, 0, c.width, c.height);
+  return c;
+}
+// How long the animation runs in all, from every animation's delay, duration
+// and iteration count; Infinity if anything loops forever.
+function runLength(doc) {
+  let total = 0;
+  for (const m of cssOf(doc).matchAll(/(?:^|[;{\s])animation\s*:\s*([^;}]+)/g))
+    for (const seg of splitAnimationsRaw(m[1])) {
+      const a = parseAnimation(seg);
+      if (!a.name) continue;
+      total = Math.max(total, a.delay + a.duration * (a.count === "infinite" ? Infinity : parseFloat(a.count) || 1));
+    }
+  return total;
+}
+const framePixels = async (svgText, t, w, h) =>
+  (await frameCanvas(svgText, t, w, h)).getContext("2d").getImageData(0, 0, Math.round(w), Math.round(h)).data;
+// More than a rounding difference anywhere in the frame.
+function framesDiffer(a, b) {
+  for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 3) return true;
+  return false;
+}
+// When to look — the moments the delivery the client signed off was checked at:
+// every 0.1 s through the motion and half a second into the hold (at most 60
+// looks), then every 2 s of the hold, four points through the fade, and the
+// frame the ad finally stops on. Later plays repeat the first.
+function sampleTimes(timing) {
+  const T = timing.timeline || 0, H = timing.hold || 0, F = timing.fade || 0;
+  const out = [];
+  if (isFinite(timing.total) && timing.total > 0) out.push(timing.total + 0.5);
+  const step = Math.max(0.1, (T + 0.5) / 60);
+  for (let t = 0; t <= T + 0.5 + 1e-6; t += step) out.push(t);
+  for (let t = T + 1; t < T + H - 1e-6; t += 2) out.push(t);
+  if (F > 0) for (const f of [0, 0.3, 0.6, 0.9]) out.push(T + H + F * f);
+  return [...new Set(out.map(t => +t.toFixed(3)))];
+}
+const base64 = u8 => {
+  let bin = "";
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(bin);
+};
+
+/* ------------------------------------------------------ hidden images ---- */
+// Figma frames often carry images nobody sees: copy variants stacked under the
+// photo on top, or a photo used only for the outline of a mask. Every image
+// costs weight, so these starve the ones that show. Each image is tested by
+// rendering the banner through its timeline without it, against small copies
+// of every image to keep it quick, and goes only if no frame changes. Removals
+// are tried one at a time against the original, so two layers hiding each other
+// can't both go.
+function editImage(root, i, how) {
+  const ims = [...root.querySelectorAll(`image[data-cm-g="${i}"]`)];
+  if (!ims.length) return false;
+  if (how === "white" && ims.some(im => !im.hasAttribute("width") || !im.hasAttribute("height"))) return false;
+  for (const im of ims) {
+    if (how === "remove") {
+      if (im.id) root.querySelectorAll("use").forEach(u => {
+        if ((u.getAttribute("href") || u.getAttributeNS(XLINK, "href")) === `#${im.id}`) u.remove();
+      });
+      im.remove();
+    } else {
+      // Only its outline matters (it shapes an alpha mask), and an opaque photo's
+      // outline is its box: a white rect of the same size does the same job.
+      const r = im.ownerDocument.createElementNS(im.namespaceURI, "rect");
+      for (const a of [...im.attributes])
+        if (!/^(href|xlink:href|preserveAspectRatio|data-name|data-cm-g)$/.test(a.name)) r.setAttribute(a.name, a.value);
+      r.setAttribute("fill", "#fff");
+      im.replaceWith(r);
+    }
+  }
+  return true;
+}
+async function removeHiddenImages(ctx, decoded, times) {
+  if (!decoded.length) return { removed: [] };
+  const why = whyNoFreeze(ctx.doc);
+  if (why) return { removed: [], skipped: `${why}, so frames can't be compared` };
+  if (!sharesOneClock(ctx.doc)) return { removed: [], skipped: "its animations don't all start together, so frames can't be compared" };
+  if (!(times.length > 1) && ctx.keyframes) return { removed: [], skipped: "the animation's length couldn't be read" };
+  const w = ctx.width, h = ctx.height;
+  decoded.forEach((d, i) => d.els.forEach(el => el.setAttribute("data-cm-g", i)));
+  try {
+    const small = decoded.map(d => {
+      const s = Math.min(1, 160 / Math.max(d.img.naturalWidth, d.img.naturalHeight));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(d.img.naturalWidth * s)); c.height = Math.max(1, Math.round(d.img.naturalHeight * s));
+      c.getContext("2d").drawImage(d.img, 0, 0, c.width, c.height);
+      return c.toDataURL(d.alpha ? "image/png" : "image/jpeg", 0.9);
+    });
+    const proto = ctx.doc.documentElement.cloneNode(true);
+    decoded.forEach((d, i) => proto.querySelectorAll(`image[data-cm-g="${i}"]`).forEach(el => {
+      el.setAttribute("href", small[i]);
+      if (el.hasAttributeNS(XLINK, "href")) el.setAttributeNS(XLINK, "xlink:href", small[i]);
+    }));
+    const textWith = edits => {
+      const root = proto.cloneNode(true);
+      for (const [i, how] of edits) if (!editImage(root, i, how)) return null;
+      return new XMLSerializer().serializeToString(root);
+    };
+    const base = [];
+    const s0 = textWith(new Map());
+    for (const t of times) base.push(await framePixels(s0, t, w, h));
+    // A control: with every image gone the frame must change. If it doesn't,
+    // this browser didn't draw the images at all, and every comparison would
+    // wrongly call them hidden.
+    const none = textWith(new Map(decoded.map((d, i) => [i, "remove"])));
+    if (none && !framesDiffer(base[0], await framePixels(none, times[0], w, h)) &&
+        !framesDiffer(base[1] || base[0], await framePixels(none, times[1] !== undefined ? times[1] : times[0], w, h)))
+      return { removed: [], skipped: "the images didn't draw in this browser's test frames" };
+    const same = async edits => {
+      const s = textWith(edits);
+      if (!s) return false;
+      for (let k = 0; k < times.length; k++) if (framesDiffer(base[k], await framePixels(s, times[k], w, h))) return false;
+      return true;
+    };
+    const edits = new Map();
+    const order = decoded.map((d, i) => i).sort((a, b) => decoded[b].href.length - decoded[a].href.length);
+    for (const i of order)
+      for (const how of decoded[i].alpha ? ["remove"] : ["remove", "white"]) {
+        const trial = new Map(edits).set(i, how);
+        if (await same(trial)) { edits.set(i, how); break; }
+      }
+    for (const [i, how] of edits) editImage(ctx.doc.documentElement, i, how);
+    const removed = [...edits].map(([i, how]) => ({ i, how, bytes: Math.round(decoded[i].href.length * 0.75) }));
+    return { removed };
+  } catch (e) {
+    // Never let the check stop a build: if this browser can't read the frames
+    // back, everything stays in.
+    return { removed: [], skipped: `the frames couldn't be compared here (${(e && e.message) || e})` };
+  } finally {
+    ctx.doc.querySelectorAll("[data-cm-g]").forEach(el => el.removeAttribute("data-cm-g"));
+  }
+}
+
+/* ------------------------------------------------------------- backup ---- */
+// The backup image an ad server shows where HTML5 can't run: the end frame as
+// a JPEG, the best quality that fits SPEC.maxBackupBytes. Drawn from the images
+// that ship, over the shell's own black, so it matches the ad exactly.
+async function makeBackup(out) {
+  if (!out || !out.chosen || !out.html || !out.timing) return { error: "Nothing was built to make a backup from." };
+  let svg = out.html.slice(out.html.indexOf("<svg"), out.html.lastIndexOf("</svg>") + 6);
+  for (const a of out.assets) svg = svg.split(`"${a.name}"`).join(`"data:${a.type};base64,${base64(a.data)}"`);
+  const doc = new DOMParser().parseFromString(svg, "image/svg+xml");
+  const tm = out.timing;
+  // After the last play everything sits in its final state whatever its delay,
+  // so a finite run needs no shared clock; a mid-hold frame of an endless loop does.
+  const why = whyNoFreeze(doc);
+  if (why) return { error: `The end frame can't be drawn here: ${why}. Export the backup from Figma.` };
+  if (!isFinite(tm.total) && !sharesOneClock(doc)) return { error: "It loops forever and its animations don't all start together, so the end frame can't be drawn. Export the backup from Figma." };
+  if (!(tm.total > 0) && !(tm.timeline > 0) && /@keyframes/.test(cssOf(doc))) return { error: "The animation's length couldn't be read, so the end frame isn't known. Export the backup from Figma." };
+  // The end frame: after the last play has finished, or mid-hold for a banner
+  // that loops forever.
+  const at = isFinite(tm.total) ? tm.total + 0.5 : tm.hold > 0 ? tm.timeline + tm.hold / 2 : Math.max(0, tm.timeline - 0.02);
+  try {
+    const c = await frameCanvas(svg, at, out.ctx.width, out.ctx.height, "#000");
+    const enc = async q => new Uint8Array(await (await toBlob(c, "image/jpeg", q)).arrayBuffer());
+    let lo = 0.1, hi = 0.95, best = null;
+    const top = await enc(hi);
+    if (top.length <= SPEC.maxBackupBytes) best = { q: hi, data: top };
+    else {
+      for (let k = 0; k < 8; k++) {
+        const q = (lo + hi) / 2, d = await enc(q);
+        if (d.length <= SPEC.maxBackupBytes) { best = { q, data: d }; lo = q; } else hi = q;
+      }
+      if (!best) { const d = await enc(0.1); if (d.length <= SPEC.maxBackupBytes) best = { q: 0.1, data: d }; }
+    }
+    if (!best) return { error: `Even at the lowest quality the end frame is over ${Math.round(SPEC.maxBackupBytes / 1000)} KB as a JPEG.` };
+    return { data: best.data, bytes: best.data.length, quality: +best.q.toFixed(2), at: +at.toFixed(2), width: c.width, height: c.height };
+  } catch (e) {
+    return { error: `The end frame couldn't be drawn here (${(e && e.message) || e}).` };
+  }
+}
+
 /* ------------------------------------------------------------- minify ---- */
 // Geometry only. Path coordinates are in user units, so 2 decimals is far below
 // one pixel. CSS is left alone: keyframe matrices carry scale factors like
@@ -854,6 +1062,11 @@ async function run(file, opts = {}) {
     }
   }
 
+  // When things happen, for comparing frames and drawing the end frame: one
+  // play, the hold and fade between plays, and the whole run as it now stands
+  // (after any cap on looping).
+  let timing = { timeline: ctx.cycle || 0, hold: 0, fade: 0, total: runLength(ctx.doc) };
+
   // Plays chosen by the person replace whatever looping the export had.
   if (opts.plays && opts.plays !== "auto") {
     const forever = opts.plays === "forever" || opts.plays === Infinity;
@@ -862,6 +1075,7 @@ async function run(file, opts = {}) {
     const playsRule = { id: "plays", title: "Plays" };
     const fade = plays > 1 ? Math.max(0, Number(opts.fade) || 0) : 0;
     const loop = applyLoop(ctx.doc, plays, pause, fade);
+    if (loop.ok) timing = { timeline: loop.timeline, hold: pause, fade, total: loop.total };
     if (!loop.ok) {
       results.push({ rule: playsRule, ...warn(`The number of plays couldn't be set: ${loop.reason}. Left as exported.`, "") });
     } else {
@@ -914,6 +1128,26 @@ async function run(file, opts = {}) {
     decoded.push({ href: g.href, els: g.els, img, alpha: usesAlpha(img), target });
   }
 
+  // Images that never show cost weight the visible ones need.
+  if (decoded.length) {
+    const hidden = await removeHiddenImages(ctx, decoded, sampleTimes(timing));
+    const hiddenRule = { id: "hidden", title: "Images that never show" };
+    if (hidden.removed.length) {
+      const gone = new Set(hidden.removed.map(r => r.i));
+      for (let i = decoded.length - 1; i >= 0; i--) if (gone.has(i)) decoded.splice(i, 1);
+      ctx.images = ctx.images.filter(im => im.el.isConnected && im.el.localName === "image");
+      const n = hidden.removed.length, saved = hidden.removed.reduce((s, r) => s + r.bytes, 0);
+      const masks = hidden.removed.filter(r => r.how === "white").length;
+      results.push({ rule: hiddenRule, ...fixed(
+        `${n} image${n === 1 ? "" : "s"} that never show${n === 1 ? "s" : ""} on screen left out (${kb(saved)} of source).`,
+        `${masks ? `${masks} only shaped a mask and became a plain box; the rest ` : "They "}sat under other layers. Each was checked frame by frame through the animation: nothing on screen changed. Deleting unused layers in Figma does the same.`) });
+    } else if (hidden.skipped) {
+      results.push({ rule: hiddenRule, ...info(`Not checked: ${hidden.skipped}.`) });
+    } else {
+      results.push({ rule: hiddenRule, ...pass("Every image shows at some point.") });
+    }
+  }
+
   // Rasters ship as separate files so nothing pays the 33% base64 tax, kept flat
   // at the package root because nothing guarantees a validator walks subfolders.
   decoded.forEach((d, i) => {
@@ -932,64 +1166,86 @@ async function run(file, opts = {}) {
   const markupBytes = new TextEncoder().encode(markupHtml);
   const markupZipped = (await deflateRaw(markupBytes)).length;
 
-  const encode = async (d, rung) => {
-    const s = Math.min(1, (d.target * SPEC.ladder[rung]) / Math.max(d.img.naturalWidth, d.img.naturalHeight));
-    const canvas = drawTo(d.img, d.img.naturalWidth * s, d.img.naturalHeight * s);
-    const blob = await toBlob(canvas, d.type, d.type === "image/jpeg" ? SPEC.jpegQuality : undefined);
-    return {
-      name: d.file, type: d.type, rung, data: new Uint8Array(await blob.arrayBuffer()),
-      w: canvas.width, h: canvas.height, natW: d.img.naturalWidth, natH: d.img.naturalHeight,
-      target: d.target, drawn: Math.max(canvas.width, canvas.height)
-    };
-  };
-  const memo = new Map();
-  const at = async (i, rung) => {
-    const key = i + ":" + rung;
-    if (!memo.has(key)) memo.set(key, await encode(decoded[i], rung));
-    return memo.get(key);
-  };
-  const totalOf = async picks => {
-    let n = 0;
-    for (let i = 0; i < picks.length; i++) n += (await at(i, picks[i])).data.length;
-    return n;
-  };
-
   const weightRule = { id: "weight", title: `Package within ${SPEC.maxZipKB} KB` };
   const imageBudget = budget - markupZipped;
-  let assets = [], picks = [], overBudget = false;
+  // The fit at one JPEG quality: every image's rung on the ladder. A PNG doesn't
+  // depend on the JPEG quality, so its encodes are shared between fits.
+  const memo = new Map();
+  const fitAt = async quality => {
+    const encode = async (d, rung) => {
+      const s = Math.min(1, (d.target * SPEC.ladder[rung]) / Math.max(d.img.naturalWidth, d.img.naturalHeight));
+      const canvas = drawTo(d.img, d.img.naturalWidth * s, d.img.naturalHeight * s);
+      const blob = await toBlob(canvas, d.type, d.type === "image/jpeg" ? quality : undefined);
+      return {
+        name: d.file, type: d.type, rung, data: new Uint8Array(await blob.arrayBuffer()),
+        w: canvas.width, h: canvas.height, natW: d.img.naturalWidth, natH: d.img.naturalHeight,
+        target: d.target, drawn: Math.max(canvas.width, canvas.height)
+      };
+    };
+    const at = async (i, rung) => {
+      const key = decoded[i].type === "image/jpeg" ? `${i}:${rung}:${quality}` : `${i}:${rung}`;
+      if (!memo.has(key)) memo.set(key, await encode(decoded[i], rung));
+      return memo.get(key);
+    };
+    const totalOf = async picks => {
+      let n = 0;
+      for (let i = 0; i < picks.length; i++) n += (await at(i, picks[i])).data.length;
+      return n;
+    };
 
-  if (imageBudget <= 0) {
-    // Markup alone is over budget, so no amount of image reduction can help.
-    // Leave them at full size: the numbers should show where the weight really
-    // is, not a set of ruined images in a package that is blocked anyway.
-    overBudget = true;
-    for (let i = 0; i < decoded.length; i++) picks.push(0);
-  } else if (decoded.length) {
-    // Give every image an equal slice, take the largest rung that fits it, then
-    // hand back whatever the split left over — largest gain first, fixed order,
-    // so the same input always lands on the same result.
-    const share = imageBudget / decoded.length;
-    for (let i = 0; i < decoded.length; i++) {
-      let chosenRung = SPEC.ladder.length - 1;
-      for (let r = 0; r < SPEC.ladder.length; r++) {
-        if ((await at(i, r)).data.length <= share) { chosenRung = r; break; }
+    let picks = [], overBudget = false;
+
+    if (imageBudget <= 0) {
+      // Markup alone is over budget, so no amount of image reduction can help.
+      // Leave them at full size: the numbers should show where the weight really
+      // is, not a set of ruined images in a package that is blocked anyway.
+      overBudget = true;
+      for (let i = 0; i < decoded.length; i++) picks.push(0);
+    } else if (decoded.length) {
+      // Give every image an equal slice, take the largest rung that fits it, then
+      // hand back whatever the split left over — largest gain first, fixed order,
+      // so the same input always lands on the same result.
+      const share = imageBudget / decoded.length;
+      for (let i = 0; i < decoded.length; i++) {
+        let chosenRung = SPEC.ladder.length - 1;
+        for (let r = 0; r < SPEC.ladder.length; r++) {
+          if ((await at(i, r)).data.length <= share) { chosenRung = r; break; }
+        }
+        picks.push(chosenRung);
       }
-      picks.push(chosenRung);
-    }
-    for (let guard = 0; guard < SPEC.ladder.length * decoded.length; guard++) {
-      let improved = false;
-      for (let i = 0; i < picks.length; i++) {
-        if (picks[i] === 0) continue;
-        const trial = picks.slice();
-        trial[i] -= 1;
-        if (await totalOf(trial) <= imageBudget) { picks = trial; improved = true; }
+      for (let guard = 0; guard < SPEC.ladder.length * decoded.length; guard++) {
+        let improved = false;
+        for (let i = 0; i < picks.length; i++) {
+          if (picks[i] === 0) continue;
+          const trial = picks.slice();
+          trial[i] -= 1;
+          if (await totalOf(trial) <= imageBudget) { picks = trial; improved = true; }
+        }
+        if (!improved) break;
       }
-      if (!improved) break;
+      overBudget = (await totalOf(picks)) > imageBudget;
     }
-    overBudget = (await totalOf(picks)) > imageBudget;
+
+    const assets = [];
+    for (let i = 0; i < decoded.length; i++) assets.push(await at(i, picks[i]));
+    return { picks, overBudget, assets, quality };
+  };
+  // A photo squeezed below the size it's drawn at looks soft; a little more JPEG
+  // compression at full size looks better. So if the first fit shrinks one, try
+  // once at the lower quality and keep that if fewer are shrunk.
+  // The retry is kept only if fewer photos are shrunk and no PNG (a logo, a
+  // cutout) is shrunk that wasn't before.
+  const isShrunk = a => a.drawn < Math.min(a.target, Math.max(a.natW, a.natH)) - 0.5;
+  const shrunk = f => f.assets.filter(a => a.type === "image/jpeg" && isShrunk(a)).length;
+  let fit = await fitAt(SPEC.jpegQuality);
+  if (SPEC.jpegQualityFloor && SPEC.jpegQualityFloor < SPEC.jpegQuality && !fit.overBudget && shrunk(fit)) {
+    const alt = await fitAt(SPEC.jpegQualityFloor);
+    const pngWorse = alt.assets.some((a, i) => a.type !== "image/jpeg" && isShrunk(a) && !isShrunk(fit.assets[i]));
+    if (!alt.overBudget && !pngWorse && shrunk(alt) < shrunk(fit)) fit = alt;
   }
-
-  for (let i = 0; i < decoded.length; i++) assets.push(await at(i, picks[i]));
+  let { picks, overBudget, assets } = fit;
+  const qNote = fit.quality === SPEC.jpegQuality ? ""
+    : ` JPEG quality ${Math.round(fit.quality * 100)}, so ${shrunk(fit) ? "fewer photos ship" : "no photo ships"} smaller than ${shrunk(fit) ? "they're" : "it's"} drawn.`;
 
   const files = [{ name: "index.html", data: markupBytes },
                  ...assets.map(a => ({ name: a.name, data: a.data }))];
@@ -1004,10 +1260,10 @@ async function run(file, opts = {}) {
     const reduced = assets.filter(a => SPEC.ladder[a.rung] < 1);
     results.push({ rule: weightRule,
       ...(reduced.length
-        ? fixed(`${kb(chosen.zipBytes)} — ${reduced.length} image(s) resampled to fit.`,
+        ? fixed(`${kb(chosen.zipBytes)} — ${reduced.length} image(s) resampled to fit.${qNote}`,
                 assets.map(a => `${a.name} ${a.natW}×${a.natH} → ${a.w}×${a.h} (${kb(a.data.length)})`).join("; ")
                 + `. Vector markup is ${kb(markupZipped)} of the total.`)
-        : pass(`${kb(chosen.zipBytes)}, nothing had to be reduced.`)) });
+        : pass(`${kb(chosen.zipBytes)}, nothing had to be reduced.${qNote}`)) });
   } else if (imageBudget <= 0) {
     results.push({ rule: weightRule,
       ...block(`The vector artwork alone is ${kb(markupZipped)}, over the ${SPEC.maxZipKB} KB budget before any image is counted.`,
@@ -1035,10 +1291,10 @@ async function run(file, opts = {}) {
       ...info(`${assets.length - png} JPEG, ${png} PNG. Format is chosen per image from its own pixels — anything using transparency has to stay PNG, since JPEG would fill those areas with black.`) });
   }
 
-  return { ctx, results, chosen, html, assets, name, blocked: false };
+  return { ctx, results, chosen, html, assets, name, timing, blocked: false };
 }
 
-return { run, SPEC, makeZip, kb, fmt, matMul, matInvert, parseTransform };
+return { run, SPEC, makeZip, makeBackup, kb, fmt, matMul, matInvert, parseTransform };
 })();
 
 /* ========================================================== motion → CSS ==== */
@@ -2032,6 +2288,187 @@ function exportAllToggle() {
 
 const slug = s => String(s).replace(/×/g, "x").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "banner";
 
+/* ------------------------------------------------------ delivery folders -- */
+// Optional: the download laid out as a delivery. One folder per version,
+// <prefix>_<code>, holding one of each size as <prefix>_<code>_<WxH>.zip with its
+// backup .jpg beside it. The codes are saved in the Figma file, so whoever opens
+// it exports the same layout.
+let delivery = { on: false, prefix: "", versions: {} };
+const SIZE = /^\d+\s*[x×X]\s*\d+$/;
+const sizeKey = s => String(s).replace(/[×X]/g, "x").replace(/\s+/g, "");
+// The size a banner exports at: the one its name promises (a frame a pixel or
+// two off is exported at its named size), else its own.
+const bannerSize = b => SIZE.test(String(b.name || "").trim()) ? sizeKey(String(b.name).trim()) : `${b.w}x${b.h}`;
+// The version a banner belongs to, from the plugin (the nearest frame above it
+// not named by a size). Without one, its path stands in.
+function versionOf(b) {
+  if (b.versionId) return { id: b.versionId, name: b.versionName || "" };
+  const parts = String(b.where || "").split(" › ").filter(Boolean);
+  while (parts.length > 1 && SIZE.test(parts[parts.length - 1].trim())) parts.pop();
+  const k = parts.join(" › ") || "(this page)";
+  return { id: k, name: parts[parts.length - 1] || k };
+}
+const codeOf = id => { const c = ((delivery.versions || {})[id] || {}).code; return c ? slug(c) : ""; };
+const prefixed = s => (delivery.prefix ? slug(delivery.prefix) + "_" : "") + s;
+// The date the person sees, not UTC's.
+const localDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+function useDelivery(d) {
+  if (d && typeof d === "object") delivery = { on: !!d.on, prefix: String(d.prefix || ""), versions: Object.assign({}, d.versions || {}) };
+}
+
+// Each change goes to the file on its own (a code, the prefix, on/off), merged
+// there into what the file holds, so two people editing don't overwrite each
+// other. Pending changes are sent if the plugin closes.
+const pendingSaves = new Map();
+function saveDelivery(key, patch) {
+  const old = pendingSaves.get(key);
+  if (old) clearTimeout(old.timer);
+  pendingSaves.set(key, { patch, timer: setTimeout(() => flushSave(key), 300) });
+}
+function flushSave(key) {
+  const p = pendingSaves.get(key);
+  if (!p) return;
+  clearTimeout(p.timer); pendingSaves.delete(key);
+  parent.postMessage({ pluginMessage: { type: "saveDelivery", patch: p.patch } }, "*");
+}
+window.addEventListener("pagehide", () => [...pendingSaves.keys()].forEach(flushSave));
+window.addEventListener("beforeunload", () => [...pendingSaves.keys()].forEach(flushSave));
+
+// What the setup makes from a banner list: per file (code + size, matched without
+// regard to case, since Finder and Windows don't tell them apart), the banners
+// that could fill it.
+function deliveryPlan(banners) {
+  const versions = new Map();
+  for (const b of banners) {
+    const v = versionOf(b);
+    if (!versions.has(v.id)) versions.set(v.id, { name: v.name, items: [] });
+    versions.get(v.id).items.push(b);
+  }
+  const files = new Map(), spelling = new Map(), uncoded = [];
+  for (const [id, v] of versions) {
+    let code = codeOf(id);
+    if (!code) { uncoded.push(...v.items); continue; }
+    code = spelling.get(code.toLowerCase()) || (spelling.set(code.toLowerCase(), code), code);
+    for (const b of v.items) {
+      const size = bannerSize(b), key = `${code}|${size}`.toLowerCase();
+      if (!files.has(key)) files.set(key, { code, size, candidates: [] });
+      files.get(key).candidates.push({ b, version: id });
+    }
+  }
+  return { versions, files: [...files.values()], uncoded };
+}
+// Which banner fills each file: the first ticked one that was built and passed.
+function deliveryPicks(ticked) {
+  const plan = deliveryPlan(exportPlan);
+  const out = [], left = [], placed = new Set();
+  for (const f of plan.files) {
+    const usable = f.candidates.filter(c => ticked.has(c.b.id) && built.has(c.b.id) && built.get(c.b.id).ok);
+    const stem = prefixed(`${f.code}_${f.size}`);
+    if (!usable.length) {
+      const c = f.candidates.find(c => ticked.has(c.b.id));
+      left.push(`${stem} (${!c ? "not ticked" : !built.has(c.b.id) ? "not built" : "not to spec"})`);
+      continue;
+    }
+    const versionsUsed = new Set(usable.map(c => c.version));
+    out.push({ stem, folder: prefixed(f.code), size: f.size, id: usable[0].b.id,
+               clash: versionsUsed.size > 1, twice: usable.length > 1 });
+    placed.add(usable[0].b.id);
+  }
+  return { plan, out, left, placed };
+}
+
+function deliveryPanel() {
+  const box = el("details", "xopts");
+  box.id = "xdelivery";
+  box.style.cssText = "display:block;margin-top:8px";
+  const sum = el("summary", null, "");
+  sum.style.cursor = "pointer";
+  box.appendChild(sum);
+  const body = el("div");
+  body.style.cssText = "display:flex;flex-direction:column;gap:6px;margin-top:6px";
+  box.appendChild(body);
+  const field = "font-size:11px;font-family:inherit;padding:3px 5px;border:1px solid var(--figma-color-border,#c7c7c7);border-radius:3px;background:var(--figma-color-bg,#fff);color:var(--figma-color-text,#000)";
+
+  const onLab = el("label");
+  onLab.style.cssText = "display:flex;gap:6px;align-items:center;margin:0;cursor:pointer";
+  const on = el("input"); on.type = "checkbox"; on.checked = delivery.on; on.style.margin = "0";
+  onLab.appendChild(on);
+  onLab.appendChild(el("span", null, "Organise the download: a folder per version, one of each size, each zip with its backup .jpg"));
+  body.appendChild(onLab);
+
+  const prefLab = el("label");
+  prefLab.style.cssText = "display:flex;gap:6px;align-items:center;margin:0";
+  prefLab.appendChild(el("span", null, "Name prefix"));
+  const pref = el("input"); pref.type = "text"; pref.value = delivery.prefix; pref.placeholder = "e.g. CLIENT24"; pref.style.cssText = field + ";width:100px";
+  prefLab.appendChild(pref);
+  const example = el("span", "muted");
+  prefLab.appendChild(example);
+  body.appendChild(prefLab);
+
+  body.appendChild(el("div", "muted", "A code for each version goes in its folder and file names. Leave it empty to leave that version out."));
+  const vlist = el("div");
+  vlist.style.cssText = "display:flex;flex-direction:column;gap:2px";
+  body.appendChild(vlist);
+  const check = el("div", "muted");
+  check.style.cssText = "font-size:11px;display:flex;flex-direction:column;gap:3px";
+  body.appendChild(check);
+
+  const plan = deliveryPlan(exportPlan);
+  const sameName = new Map();
+  for (const [, v] of plan.versions) sameName.set(v.name, (sameName.get(v.name) || 0) + 1);
+  const seen = new Map();
+  for (const [id, v] of plan.versions) {
+    const row = el("div");
+    row.style.cssText = "display:flex;gap:6px;align-items:center;padding:3px 0;border-top:1px solid var(--figma-color-border,#e5e5e5)";
+    let label = v.name || "(this page)";
+    if (sameName.get(v.name) > 1) { const k = (seen.get(v.name) || 0) + 1; seen.set(v.name, k); label += ` (${k} of ${sameName.get(v.name)})`; }
+    const name = el("span", null, label);
+    name.title = String((v.items[0] || {}).where || label);
+    name.style.cssText = "min-width:110px;font-weight:600";
+    row.appendChild(name);
+    const code = el("input"); code.type = "text"; code.value = (delivery.versions[id] || {}).code || ""; code.placeholder = "code"; code.style.cssText = field + ";width:52px";
+    code.addEventListener("input", () => {
+      delivery.versions[id] = { code: code.value.trim(), name: v.name };
+      saveDelivery(`v:${id}`, { version: { id, code: code.value.trim(), name: v.name } });
+      deliverySummary();
+    });
+    row.appendChild(code);
+    row.appendChild(el("span", "muted", `${v.items.length} size${v.items.length === 1 ? "" : "s"}`));
+    vlist.appendChild(row);
+  }
+  on.addEventListener("change", () => { delivery.on = on.checked; saveDelivery("on", { on: on.checked }); deliverySummary(); exportButton(); });
+  pref.addEventListener("input", () => { delivery.prefix = pref.value.trim(); saveDelivery("prefix", { prefix: pref.value.trim() }); deliverySummary(); });
+  box._parts = { sum, check, example };
+  box.open = delivery.on && !Object.values(delivery.versions).some(v => v && v.code);
+  return box;
+}
+// The panel's one-line summary and its notes, from the codes and the ticks.
+function deliverySummary() {
+  const box = document.getElementById("xdelivery");
+  if (!box || !box._parts) return;
+  const { sum, check, example } = box._parts;
+  example.textContent = `→ ${prefixed("1B")}/${prefixed("1B_300x250")}.zip`;
+  const ticked = new Set([...out.querySelectorAll("input.xb:checked")].map(c => c.dataset.id));
+  const plan = deliveryPlan(exportPlan);
+  const wanted = plan.files.filter(f => f.candidates.some(c => ticked.has(c.b.id)));
+  const folders = new Set(wanted.map(f => f.code.toLowerCase())).size;
+  sum.textContent = delivery.on
+    ? `Delivery folders: ${folders} folder${folders === 1 ? "" : "s"}, ${wanted.length} banner${wanted.length === 1 ? "" : "s"}`
+    : "Delivery folders: off — one flat zip";
+  check.innerHTML = "";
+  if (!delivery.on) return;
+  if (!plan.files.length) { check.appendChild(el("div", "warn", "Give at least one version a code.")); return; }
+  check.appendChild(el("div", null, `Makes ${wanted.length} banner${wanted.length === 1 ? "" : "s"} in ${folders} folder${folders === 1 ? "" : "s"}, each with its backup .jpg.`));
+  const clash = plan.files.filter(f => new Set(f.candidates.filter(c => ticked.has(c.b.id)).map(c => c.version)).size > 1);
+  if (clash.length) check.appendChild(el("div", "warn", `Two versions share a code, so these would get the same file name (the first is used): ${clash.map(f => prefixed(`${f.code}_${f.size}`)).join(", ")}.`));
+  const twice = plan.files.filter(f => f.candidates.filter(c => ticked.has(c.b.id)).length > 1 && !clash.includes(f));
+  if (twice.length) check.appendChild(el("div", "warn", `More than one banner of the same size in a version (the first that passes is used): ${twice.map(f => prefixed(`${f.code}_${f.size}`)).join(", ")}.`));
+  const unticked = plan.files.filter(f => !f.candidates.some(c => ticked.has(c.b.id)));
+  if (unticked.length) check.appendChild(el("div", null, `Not ticked, so left out: ${unticked.map(f => prefixed(`${f.code}_${f.size}`)).join(", ")}.`));
+  const uncoded = plan.uncoded.filter(b => ticked.has(b.id));
+  if (uncoded.length) check.appendChild(el("div", null, `${uncoded.length} ticked banner${uncoded.length === 1 ? " is" : "s are"} in a version with no code, so left out.`));
+}
+
 function exportButton() {
   out.querySelectorAll("input.xg").forEach(g => {
     const rows = [...out.querySelectorAll(`input.xb[data-group="${g.dataset.group}"]`)];
@@ -2042,6 +2479,7 @@ function exportButton() {
   const pa = document.getElementById("previewAll");
   if (pa) { pa.classList.toggle("hidden", !built.size); pa.textContent = `Preview all ${built.size}`; }
   updateSummary();
+  deliverySummary();
   const picked = [...out.querySelectorAll("input.xb:checked")];
   const ready = [...built.values()].filter(b => b.ok).length;
   go.classList.remove("danger");
@@ -2050,8 +2488,11 @@ function exportButton() {
   // passed — one failure mustn't hold back the rest. Ticking another unbuilt
   // banner switches it back to building.
   if (picked.length && picked.every(c => built.has(c.dataset.id))) {
-    go.disabled = !ready;
-    go.textContent = ready ? `Download ${ready} banner${ready === 1 ? "" : "s"} (.zip)` : "Nothing passed — see why below";
+    // In the delivery layout, what goes in is what the codes place.
+    const placed = delivery.on ? deliveryPicks(new Set(picked.map(c => c.dataset.id))).out.length : ready;
+    go.disabled = !placed;
+    go.textContent = placed ? `Download ${placed} banner${placed === 1 ? "" : "s"} (.zip)`
+      : ready ? "Give a version a code to download" : "Nothing passed — see why below";
     go.dataset.action = "download";
   } else {
     const todo = picked.filter(c => !built.has(c.dataset.id)).length;
@@ -2091,6 +2532,7 @@ function exportGroups(banners) {
 
 function renderExport(msg) {
   if (document.getElementById("gallery")) closeGallery();
+  useDelivery(msg.delivery);   // the setup as the file holds it now
   // A new selection is a new export: earlier builds may be out of date.
   const groups = exportGroups(msg.banners);
   exportPlan = groups.flatMap(g => g.items);
@@ -2186,6 +2628,7 @@ function renderExport(msg) {
   opts.appendChild(fadeLab);
   sync();
   card.appendChild(opts);
+  card.appendChild(deliveryPanel());
 
   // Rows, grouped under where they sit. Every group usually shares the same
   // long board name, so the heading leaves that off and shows what differs.
@@ -2347,6 +2790,16 @@ async function buildOne(b) {
       todo: "This is a plugin problem, not your file. Open Technical details below and send its contents to whoever maintains the plugin." });
   }
   const ok = !outp.blocked && !outp.results.some(r => r.status === "block");
+  // The backup image that goes beside the zip: the end frame as a JPEG.
+  let backup = null;
+  if (ok) {
+    setStatus(b.id, "Making the backup image…");
+    backup = await Converter.makeBackup(outp);
+    const backupRule = { id: "backup", title: "Backup image" };
+    outp.results.push(backup.data
+      ? { rule: backupRule, status: "pass", detail: `${Converter.kb(backup.bytes)} JPEG of the end frame, to go beside the zip.` }
+      : { rule: backupRule, status: "warn", detail: `No backup image: ${backup.error}` });
+  }
   // What the plugin received, for diagnosing a conversion that went wrong —
   // the keyframes and what came of them, without the (huge) SVG.
   const details = JSON.stringify({ banner: `${payload.where} › ${payload.name}`, converted: anim.animatedLayers, notes: anim.notes,
@@ -2361,7 +2814,7 @@ async function buildOne(b) {
   const total = loops ? anim.duration : plays * anim.duration + (plays - 1) * between;
   // What a preview covers: a looping banner's whole cycle (play, pause, fade).
   const span = loops ? anim.duration + exportLoop.pause + exportLoop.fade : total;
-  return { picked: true, ok, out: outp, notes: anim.notes, duration: total, span, onePlay: anim.duration, loops, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
+  return { picked: true, ok, out: outp, backup, notes: anim.notes, duration: total, span, onePlay: anim.duration, loops, fileName, offerSize, details, payload: { name: payload.name, where: payload.full || payload.where, width: payload.width, height: payload.height, headline: payload.headline || "" } };
 }
 
 async function buildAll() {
@@ -2478,6 +2931,15 @@ function showBanner(id) {
   pv.appendChild(el("div", "muted", b.loops
     ? "Loops forever; this plays one loop. Check the jump from the end back to the start looks clean — fading everything out at the end of the timeline avoids a jump."
     : "Check the end frame shows the call to action — the ad stops there."));
+  if (b.backup && b.backup.data) {
+    const cap = el("div", "muted", `Backup image (${Converter.kb(b.backup.bytes)} JPEG, goes beside the zip):`);
+    cap.style.marginTop = "8px";
+    pv.appendChild(cap);
+    const im = document.createElement("img");
+    im.src = URL.createObjectURL(new Blob([b.backup.data], { type: "image/jpeg" }));
+    im.style.cssText = `display:block;width:${Math.round(W * scale)}px;height:${Math.round(H * scale)}px;margin-top:4px;border:1px solid var(--figma-color-border)`;
+    pv.appendChild(im);
+  }
   }
 
   const checks = el("details");
@@ -2635,28 +3097,79 @@ function renderGallery() {
   g.appendChild(grid);
 }
 
+// A banner's zip, with its <title> set to the file's name when the delivery
+// layout names it (the build used the Figma frame's name).
+async function bannerZip(b, title) {
+  const files = title ? b.out.chosen.files.map(f => f.name !== "index.html" ? f
+    : { name: f.name, data: new TextEncoder().encode(new TextDecoder().decode(f.data).replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`)) })
+    : b.out.chosen.files;
+  return new Uint8Array(await (await Converter.makeZip(files)).arrayBuffer());
+}
+
 async function downloadAll() {
   const ticked = new Set([...out.querySelectorAll("input.xb:checked")].map(c => c.dataset.id));
-  const entries = [...built.entries()].filter(([id]) => ticked.has(id)).map(([, b]) => b);
+  const pairs = [...built.entries()].filter(([id]) => ticked.has(id));
+  const entries = pairs.map(([, b]) => b);
   const files = [], used = new Set(), csv = [["file", "banner", "where", "headline", "size", "status", "kb", "seconds", "notes"]];
-  for (const b of entries) {
-    const name = b.payload ? b.payload.name : "?";
-    const headline = b.payload ? b.payload.headline || "" : "";
-    if (!b.ok) { csv.push(["", name, b.payload ? b.payload.where : "", headline, b.payload ? `${b.payload.width}x${b.payload.height}` : "", b.error ? "error" : "not to spec", "", "", b.error || b.out.results.filter(r => r.status === "block").map(r => r.detail).join(" | ")]); continue; }
-    const inner = await Converter.makeZip(b.out.chosen.files);
-    let fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}`, k = 2;
-    while (used.has(fn)) fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}-${k++}`;
-    used.add(fn);
-    files.push({ name: `${fn}.zip`, data: new Uint8Array(await inner.arrayBuffer()) });
-    // Everything worth knowing about a banner that passed: automatic size fixes
-    // and motion that couldn't be carried across, both from its checks.
-    const notes = b.out.results.filter(r => r.status === "warn" || r.status === "fixed").map(r => r.detail);
-    csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), b.loops ? `${n3(b.duration)} per play, loops forever` : n3(b.duration), notes.join(" | ")]);
+  const date = localDate();
+  const notesOf = b => b.out.results.filter(r => r.status === "warn" || r.status === "fixed").map(r => r.detail);
+  const seconds = b => b.loops ? `${n3(b.duration)} per play, loops forever` : n3(b.duration);
+  let fileName, folders = 0, missing = [], unplaced = [], noBackup = 0, notes = [];
+  const layout = delivery.on;
+  if (layout) {
+    // One file per version code and size, filled by the first ticked banner that
+    // passed. The report keeps what was left out, and why.
+    const picks = deliveryPicks(ticked);
+    if (!picks.out.length) {
+      result.innerHTML = "";
+      result.appendChild(el("div", "card warn", "Nothing to download: no ticked banner that passed belongs to a version with a code. Give the versions their codes under Delivery folders."));
+      return;
+    }
+    const root = prefixed(`HTML5_${date}`);
+    const inFolder = new Set();
+    for (const p of picks.out) {
+      const b = built.get(p.id);
+      const zipData = await bannerZip(b, p.stem);
+      files.push({ name: `${root}/${p.folder}/${p.stem}.zip`, data: zipData });
+      if (b.backup && b.backup.data) files.push({ name: `${root}/${p.folder}/${p.stem}.jpg`, data: b.backup.data });
+      else noBackup++;
+      inFolder.add(p.folder);
+      if (p.clash) notes.push(`${p.stem}: two versions share its code; the first was used`);
+      else if (p.twice) notes.push(`${p.stem}: more than one banner of this size in its version; the first that passed was used`);
+      csv.push([`${p.folder}/${p.stem}.zip`, b.payload.name, b.payload.where, b.payload.headline || "", p.size, "ready", (zipData.length / 1024).toFixed(1), seconds(b), notesOf(b).join(" | ")]);
+    }
+    missing = picks.left;
+    for (const [id, b] of pairs) if (b.ok && !picks.placed.has(id)) unplaced.push(`${b.payload.where} › ${b.payload.name}`);
+    for (const m of missing) csv.push(["", "", "", "", "", "left out", "", "", m]);
+    for (const n of notes) csv.push(["", "", "", "", "", "note", "", "", n]);
+    for (const u of unplaced) csv.push(["", u, "", "", "", "passed, but not placed (no code, or another banner fills its file)", "", "", ""]);
+    for (const b of entries) if (!b.ok) csv.push(["", b.payload ? b.payload.name : "?", b.payload ? b.payload.where : "", b.payload ? b.payload.headline || "" : "", b.payload ? `${b.payload.width}x${b.payload.height}` : "", b.error ? "error" : "not to spec", "", "", b.error || b.out.results.filter(r => r.status === "block").map(r => r.detail).join(" | ")]);
+    folders = inFolder.size;
+    fileName = `${root}.zip`;
+  } else {
+    for (const b of entries) {
+      const name = b.payload ? b.payload.name : "?";
+      const headline = b.payload ? b.payload.headline || "" : "";
+      if (!b.ok) { csv.push(["", name, b.payload ? b.payload.where : "", headline, b.payload ? `${b.payload.width}x${b.payload.height}` : "", b.error ? "error" : "not to spec", "", "", b.error || b.out.results.filter(r => r.status === "block").map(r => r.detail).join(" | ")]); continue; }
+      let fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}`, k = 2;
+      while (used.has(fn)) fn = `${b.fileName}_${b.out.ctx.width}x${b.out.ctx.height}-${k++}`;
+      used.add(fn);
+      files.push({ name: `${fn}.zip`, data: await bannerZip(b) });
+      // The backup goes beside the zip with the same name, as ad servers expect.
+      if (b.backup && b.backup.data) files.push({ name: `${fn}.jpg`, data: b.backup.data });
+      else noBackup++;
+      // Everything worth knowing about a banner that passed: automatic size fixes
+      // and motion that couldn't be carried across, both from its checks.
+      csv.push([`${fn}.zip`, name, b.payload.where, headline, `${b.out.ctx.width}x${b.out.ctx.height}`, "ready", (b.out.chosen.zipBytes / 1024).toFixed(1), seconds(b), notesOf(b).join(" | ")]);
+    }
+    fileName = `html5-banners-${date}.zip`;
   }
   const esc = v => `"${String(v).replace(/"/g, '""')}"`;
-  files.push({ name: "report.csv", data: new TextEncoder().encode(csv.map(r => r.map(esc).join(",")).join("\n")) });
+  const report = new TextEncoder().encode(csv.map(r => r.map(esc).join(",")).join("\n"));
+  // In the delivery layout the report stays out of the zip, so the zip can go
+  // to the client as it is; it's offered separately below.
+  if (!layout) files.push({ name: "report.csv", data: report });
   const zip = await Converter.makeZip(files);
-  const fileName = `html5-banners-${new Date().toISOString().slice(0, 10)}.zip`;
   const url = URL.createObjectURL(zip);
   // Figma's plugin frame can block a download started from code after a
   // wait, so the file is also offered as a link to click — a direct click on
@@ -2668,14 +3181,27 @@ async function downloadAll() {
   auto.remove();
   result.innerHTML = "";
   const card = el("div", "card");
-  const left = entries.length - (files.length - 1);
-  card.appendChild(el("div", "ok", `${files.length - 1} banner${files.length - 1 === 1 ? "" : "s"} packaged, with a report.csv.`));
+  const zips = files.filter(f => f.name.endsWith(".zip")).length, jpgs = files.filter(f => f.name.endsWith(".jpg")).length;
+  const notReady = entries.filter(b => !b.ok).length;
+  card.appendChild(el("div", "ok", layout
+    ? `${zips} banner${zips === 1 ? "" : "s"} in ${folders} folder${folders === 1 ? "" : "s"}${noBackup ? `, ${jpgs} with a backup .jpg` : ", each with its backup .jpg"}.`
+    : `${zips} banner${zips === 1 ? "" : "s"} packaged, ${jpgs} with a backup .jpg beside it, with a report.csv.`));
   const save = el("a", null, `Save ${fileName} (${Converter.fmt(zip.size)})`);
   save.href = url; save.download = fileName;
   save.style.cssText = "display:inline-block;margin-top:6px;font-weight:600;color:var(--figma-color-text-brand)";
   card.appendChild(save);
   card.appendChild(el("div", "muted", "It saves to your Downloads folder. If nothing appeared there, click the link above."));
-  if (left) card.appendChild(el("div", "warn", `${left} banner${left === 1 ? " was" : "s were"} left out because ${left === 1 ? "it isn't" : "they aren't"} to spec — see the report.`));
+  if (layout) {
+    const rep = el("a", null, "Save the report (.csv)");
+    rep.href = URL.createObjectURL(new Blob([report], { type: "text/csv" })); rep.download = fileName.replace(/\.zip$/, "_report.csv");
+    rep.style.cssText = "display:inline-block;margin-top:4px;color:var(--figma-color-text-brand)";
+    card.appendChild(rep);
+  }
+  if (missing.length) card.appendChild(el("div", missing.some(m => !/not ticked\)$/.test(m)) ? "warn" : "muted", `Left out (${missing.length}): ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? ", …" : ""}.`));
+  if (notes.length) card.appendChild(el("div", "warn", notes.slice(0, 6).join(". ") + (notes.length > 6 ? ". …" : ".")));
+  if (unplaced.length) card.appendChild(el("div", "warn", `${unplaced.length} banner${unplaced.length === 1 ? " passed but isn't" : "s passed but aren't"} in the download (no code, or another banner fills the file) — see the report.`));
+  if (noBackup) card.appendChild(el("div", "warn", `${noBackup} banner${noBackup === 1 ? " has" : "s have"} no backup image — see each banner's checks.`));
+  if (notReady) card.appendChild(el("div", "warn", `${notReady} banner${notReady === 1 ? " was" : "s were"} left out because ${notReady === 1 ? "it isn't" : "they aren't"} to spec — see the report.`));
   result.appendChild(card);
 }
 
@@ -2745,7 +3271,10 @@ onmessage = ev => {
     count();
   }
   if (msg.type === "clearReview") renderClearReview(msg);
-  if (msg.type === "settings") exportAllOn = !!msg.exportAll;
+  if (msg.type === "settings") {
+    exportAllOn = !!msg.exportAll;
+    useDelivery(msg.delivery);
+  }
   // A new scan means the selection or page changed; a review would be stale.
   if (msg.type === "others" && msg.count === null) { const r = document.getElementById("review"); if (r) r.remove(); }
   if (msg.type === "history") {

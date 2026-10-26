@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banner Preview</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --line: #dfe3e8; --text: #16191d; --muted: #646b75;
+    --accent: #2f6fed; --ok: #18794e; --warn: #a15c00; --bad: #c62828; --tile: #eef0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101215; --panel: #171a1f; --line: #2a2f37; --text: #e8eaed; --muted: #98a0aa;
+      --accent: #6c9cff; --ok: #4cc38a; --warn: #f0a63a; --bad: #ff6b6b; --tile: #0c0e11;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101215; --panel: #171a1f; --line: #2a2f37; --text: #e8eaed; --muted: #98a0aa;
+    --accent: #6c9cff; --ok: #4cc38a; --warn: #f0a63a; --bad: #ff6b6b; --tile: #0c0e11;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1400px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  #drop { border: 2px dashed var(--line); border-radius: 10px; background: var(--panel); padding: 28px 16px; text-align: center; cursor: pointer; }
+  #drop.over { border-color: var(--accent); }
+  #drop b { display: block; font-size: 15px; margin-bottom: 4px; }
+  #drop span { color: var(--muted); }
+  .bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center;
+         background: var(--bg); padding: 12px 0; border-bottom: 1px solid var(--line); margin-top: 16px; }
+  .bar.hidden, .hidden { display: none !important; }
+  button, select { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line);
+                   background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  input[type=range] { flex: 1; min-width: 160px; }
+  .time { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 92px; }
+  label.chk { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; cursor: pointer; }
+  .summary { margin: 14px 0 4px; color: var(--muted); }
+  .summary b { color: var(--text); }
+  h2 { font-size: 14px; margin: 26px 0 10px; display: flex; gap: 8px; align-items: baseline; }
+  h2 span { color: var(--muted); font-weight: 400; font-size: 13px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; max-width: 100%; }
+  .pair { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+  .shot { display: flex; flex-direction: column; gap: 4px; }
+  .shot small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .frame { position: relative; overflow: hidden; background: var(--tile); border: 1px solid var(--line); }
+  .frame iframe { border: 0; position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+  .frame img { display: block; width: 100%; height: 100%; }
+  .frame .none { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12px; text-align: center; padding: 6px; }
+  .name { font-weight: 600; margin-top: 8px; word-break: break-all; }
+  .facts { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 6px; }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+  .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+  .pill.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+  .click { font-size: 12px; color: var(--muted); margin-top: 4px; word-break: break-all; }
+  .click.ok { color: var(--ok); }
+  .err { color: var(--bad); }
+  .legend { color: var(--muted); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Banner Preview</h1>
+  <p class="sub">Drop a delivery zip, banner zips or a folder to see every banner playing beside its backup image. Everything stays on your computer.</p>
+  <div id="drop"><b>Drop zips or a folder here</b><span>or click to choose files. A delivery zip of folders, a zip of zips, or single banner zips all work.</span></div>
+  <input type="file" id="file" multiple accept=".zip,.jpg,.jpeg,.png" class="hidden">
+
+  <div class="bar hidden" id="bar">
+    <button class="primary" id="play">Play all</button>
+    <button id="ends">End frames</button>
+    <input type="range" id="scrub" min="0" max="1000" value="0">
+    <span class="time" id="time">0.00s</span>
+    <label class="chk" title="Sets a test landing page in every banner, the way an ad server does, and shows what a click opens. Untick to see the files exactly as delivered: an empty clickTag, so clicks open nothing."><input type="checkbox" id="testClicks" checked> Test clicks</label>
+    <select id="folder"></select>
+    <button id="clear">Clear</button>
+  </div>
+  <div class="summary hidden" id="summary"></div>
+  <div class="legend hidden" id="legend">Limits checked: zip under 200 KB (150 KB leaves room for the backup), backup JPG under 50 KB, zip and backup together under 200 KB. KB as Finder counts them (1 KB = 1000 bytes).</div>
+  <div id="groups"></div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const TEST_URL = "https://www.example.com/?qa=banner-preview";
+const LIMITS = { zip: 200000, roomy: 150000, backup: 50000, pair: 200000 };
+const kb = n => `${(n / 1000).toFixed(n < 10000 ? 1 : 0)} KB`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const MIME = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", svg: "image/svg+xml", webp: "image/webp",
+               css: "text/css", js: "text/javascript", json: "application/json", html: "text/html", woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf" };
+const mimeOf = n => MIME[(n.split(".").pop() || "").toLowerCase()] || "application/octet-stream";
+const baseName = p => p.split("/").pop();
+const dirName = p => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+const stemOf = p => baseName(p).replace(/\.[^.]+$/, "");
+
+/* ---------------------------------------------------------------- zip --- */
+// Read through the central directory, so zips made by Finder (which put sizes
+// after the data) read as well as any other.
+async function readZip(u8) {
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("not a readable zip");
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const dec = new TextDecoder();
+  const out = [];
+  for (let k = 0; k < count; k++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true), comp = dv.getUint32(p + 20, true);
+    const nameLen = dv.getUint16(p + 28, true), extraLen = dv.getUint16(p + 30, true), commentLen = dv.getUint16(p + 32, true);
+    const local = dv.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nameLen));
+    p += 46 + nameLen + extraLen + commentLen;
+    if (name.endsWith("/") || name.startsWith("__MACOSX") || /(^|\/)\.(DS_Store|_)/.test(name)) continue;
+    const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+    let data = u8.slice(start, start + comp);
+    if (method === 8) data = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer());
+    else if (method !== 0) continue;
+    out.push({ name, data });
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------- reading --- */
+let banners = [], images = [], nextId = 0;
+// A zip holding an HTML page is a banner; otherwise it's a container, opened
+// in turn (its zips are banners or containers, its images are backups).
+async function addZip(path, u8, depth = 0) {
+  let files;
+  try { files = await readZip(u8); } catch (e) { banners.push({ id: nextId++, path, error: `couldn't read it (${e.message})`, size: u8.length }); return; }
+  const html = files.filter(f => /\.html?$/i.test(f.name));
+  if (html.length) {
+    // The page at the root, or inside the one folder everything sits in.
+    const page = html.find(f => /^index\.html?$/i.test(f.name)) || html.find(f => /(^|\/)index\.html?$/i.test(f.name)) || html[0];
+    const root = dirName(page.name);
+    const own = files.filter(f => !root || f.name.startsWith(root + "/")).map(f => ({ name: root ? f.name.slice(root.length + 1) : f.name, data: f.data }));
+    banners.push({ id: nextId++, path, size: u8.length, files: own, page: page.name.slice(root ? root.length + 1 : 0), nested: !!root });
+    return;
+  }
+  if (depth > 3) return;
+  const base = dirName(path);
+  for (const f of files) {
+    const full = [base, f.name].filter(Boolean).join("/");
+    if (/\.zip$/i.test(f.name)) await addZip(full, f.data, depth + 1);
+    else if (/\.(jpe?g|png|gif|webp)$/i.test(f.name)) images.push({ path: full, data: f.data });
+  }
+}
+async function addFiles(list) {
+  for (const { path, file } of list) {
+    const u8 = new Uint8Array(await file.arrayBuffer());
+    if (/\.zip$/i.test(path)) await addZip(path, u8);
+    else if (/\.(jpe?g|png|gif|webp)$/i.test(path)) images.push({ path, data: u8 });
+  }
+  render();
+}
+async function readDrop(dt) {
+  const out = [];
+  const entries = [...(dt.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (!entries.length) { for (const f of dt.files) out.push({ path: f.name, file: f }); return out; }
+  const walk = async (e, path) => {
+    if (e.isFile) out.push({ path: path + e.name, file: await new Promise((res, rej) => e.file(res, rej)) });
+    else if (e.isDirectory) {
+      const r = e.createReader();
+      let batch;
+      do { batch = await new Promise((res, rej) => r.readEntries(res, rej)); for (const x of batch) await walk(x, path + e.name + "/"); } while (batch.length);
+    }
+  };
+  for (const e of entries) await walk(e, "");
+  return out;
+}
+
+/* ------------------------------------------------------------- preview --- */
+const b64 = u8 => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+// The page with every file it uses inlined (a preview frame has no folder to
+// load them from), plus a small driver: seek, play, end frame, and — when
+// testing clicks — a landing page set the way an ad server sets it, with
+// window.open reporting what it would open instead of opening it.
+function previewDoc(b, testClicks) {
+  const dec = new TextDecoder();
+  let html = dec.decode(b.files.find(f => f.name === b.page).data);
+  const others = b.files.filter(f => f.name !== b.page).sort((x, y) => y.name.length - x.name.length);
+  const uri = new Map();
+  for (const f of others) {
+    let data = f.data;
+    if (/\.css$/i.test(f.name)) {   // a stylesheet's own images, before it becomes a data URI
+      let css = dec.decode(data);
+      for (const g of others) if (g !== f) css = css.split(g.name).join(`data:${mimeOf(g.name)};base64,${b64(g.data)}`);
+      data = new TextEncoder().encode(css);
+    }
+    uri.set(f.name, `data:${mimeOf(f.name)};base64,${b64(data)}`);
+  }
+  for (const f of others) html = html.split(f.name).join(uri.get(f.name));
+  const driver = `<script>(function(){var ID=${b.id};
+${testClicks ? `try{window.clickTag=${JSON.stringify(TEST_URL)};}catch(e){}` : ""}
+window.open=function(u,t){parent.postMessage({bp:"open",id:ID,u:String(u),t:String(t)},"*");return null;};
+function A(){return document.getAnimations?document.getAnimations():[];}
+addEventListener("message",function(e){var d=e.data||{};
+ if(d.cmd==="seek")A().forEach(function(x){x.pause();x.currentTime=d.t;});
+ else if(d.cmd==="play")A().forEach(function(x){x.currentTime=0;x.play();});
+ else if(d.cmd==="end")A().forEach(function(x){var c=x.effect.getComputedTiming();x.pause();x.currentTime=isFinite(c.endTime)?c.endTime:Math.max(0,(c.duration||0)-1);});});
+addEventListener("load",function(){setTimeout(function(){var m=0,inf=false;A().forEach(function(x){var c=x.effect.getComputedTiming();if(!isFinite(c.endTime))inf=true;else m=Math.max(m,c.endTime);});parent.postMessage({bp:"len",id:ID,ms:m,inf:inf},"*");},400);});
+})();<\/script>`;
+  return /<\/body>/i.test(html) ? html.replace(/<\/body>(?![\s\S]*<\/body>)/i, driver + "</body>") : html + driver;
+}
+function sizeOf(b) {
+  const page = b.files && b.files.find(f => f.name === b.page);
+  if (!page) return null;
+  const h = new TextDecoder().decode(page.data);
+  const m = /ad\.size"\s+content="width=(\d+),\s*height=(\d+)/i.exec(h) || /data-gwd-width="(\d+)px"[^>]*data-gwd-height="(\d+)px"/.exec(h) || /(\d{2,4})\s*[x×X]\s*(\d{2,4})/.exec(baseName(b.path));
+  return m ? { w: +m[1], h: +m[2], html: h } : { w: 300, h: 250, html: h };
+}
+
+let frames = [], longest = 0;
+const observer = new IntersectionObserver(entries => {
+  for (const e of entries) if (e.isIntersecting && !e.target.dataset.loaded) { e.target.dataset.loaded = "1"; loadFrame(e.target); }
+}, { rootMargin: "400px" });
+function loadFrame(box) {
+  const b = banners.find(x => x.id === +box.dataset.id);
+  const f = document.createElement("iframe");
+  f.setAttribute("sandbox", "allow-scripts");
+  f.width = b.dims.w; f.height = b.dims.h;
+  if (+box.dataset.scale < 1) f.style.transform = `scale(${box.dataset.scale})`;
+  f.srcdoc = previewDoc(b, $("testClicks").checked);
+  box.innerHTML = ""; box.appendChild(f);
+  frames.push({ id: b.id, f });
+}
+
+function render() {
+  frames = []; longest = 0;
+  $("groups").innerHTML = "";
+  observer.disconnect();
+  const have = banners.length > 0;
+  for (const id of ["bar", "summary", "legend"]) $(id).classList.toggle("hidden", !have);
+  if (!have) return;
+  // Each banner's backup: the image beside it with the same name (case aside).
+  const byKey = new Map(images.map(i => [(dirName(i.path) + "/" + stemOf(i.path)).toLowerCase(), i]));
+  for (const b of banners) {
+    const key = (dirName(b.path) + "/" + stemOf(b.path)).toLowerCase();
+    b.backup = byKey.get(key) || null;
+    if (b.files) { const s = sizeOf(b); b.dims = { w: s.w, h: s.h }; b.loopsInScript = /gotoAndPlay\(/.test(s.html) && !/gotoAndPlayNTimes\(/.test(s.html); }
+  }
+  const byFolder = new Map();
+  for (const b of banners) { const g = dirName(b.path).split("/").pop() || "(top level)"; if (!byFolder.has(g)) byFolder.set(g, []); byFolder.get(g).push(b); }
+  const groups = new Map([...byFolder].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })));
+  const sel = $("folder"), keep = sel.value;
+  sel.innerHTML = `<option value="">All folders (${banners.length})</option>` + [...groups].map(([g, l]) => `<option value="${esc(g)}">${esc(g)} (${l.length})</option>`).join("");
+  if ([...groups.keys()].includes(keep)) sel.value = keep;
+  let issues = 0, noBackup = 0, heavyPairs = 0;
+  for (const [g, list] of groups) {
+    if (sel.value && sel.value !== g) continue;
+    list.sort((a, b) => (a.dims ? a.dims.w * a.dims.h : 0) - (b.dims ? b.dims.w * b.dims.h : 0));
+    const h = document.createElement("h2");
+    h.innerHTML = `${esc(g)} <span>${list.length} banner${list.length === 1 ? "" : "s"}</span>`;
+    $("groups").appendChild(h);
+    const grid = document.createElement("div");
+    grid.className = "grid";
+    $("groups").appendChild(grid);
+    for (const b of list) {
+      const card = document.createElement("div");
+      card.className = "card";
+      if (b.error) { card.innerHTML = `<div class="name">${esc(baseName(b.path))}</div><div class="err">This zip ${esc(b.error)}.</div>`; grid.appendChild(card); issues++; continue; }
+      const scale = Math.min(1, 300 / b.dims.w, 300 / b.dims.h);
+      const W = Math.round(b.dims.w * scale), H = Math.round(b.dims.h * scale);
+      const pair = b.size + (b.backup ? b.backup.data.length : 0);
+      const facts = [];
+      facts.push(b.size > LIMITS.zip ? `<span class="pill bad">zip ${kb(b.size)} — over 200</span>` : b.size > LIMITS.roomy ? `<span class="pill warn">zip ${kb(b.size)}</span>` : `<span class="pill ok">zip ${kb(b.size)}</span>`);
+      if (b.backup) {
+        const bk = b.backup.data.length, jpg = /\.jpe?g$/i.test(b.backup.path);
+        facts.push(!jpg ? `<span class="pill warn">backup is ${esc(b.backup.path.split(".").pop().toUpperCase())}, not JPG</span>` : bk > LIMITS.backup ? `<span class="pill bad">backup ${kb(bk)} — over 50</span>` : `<span class="pill ok">backup ${kb(bk)}</span>`);
+        facts.push(pair > LIMITS.pair ? `<span class="pill warn">together ${kb(pair)}</span>` : `<span class="pill ok">together ${kb(pair)}</span>`);
+        if (pair > LIMITS.pair) heavyPairs++;
+      } else { facts.push(`<span class="pill bad">no backup</span>`); noBackup++; }
+      facts.push(`<span class="pill" data-len="${b.id}">${b.loopsInScript ? "loops forever (GWD)" : "length …"}</span>`);
+      if (b.nested) facts.push(`<span class="pill warn">page is in a subfolder</span>`);
+      if (b.size > LIMITS.zip || (b.backup && b.backup.data.length > LIMITS.backup) || !b.backup) issues++;
+      card.innerHTML = `
+        <div class="pair">
+          <div class="shot"><small>HTML5 · ${b.dims.w}×${b.dims.h}</small><div class="frame" style="width:${W}px;height:${H}px" data-id="${b.id}" data-scale="${scale}"><div class="none">Loading…</div></div></div>
+          <div class="shot"><small>Backup</small><div class="frame" style="width:${W}px;height:${H}px">${b.backup ? "" : '<div class="none">No backup image with the same name</div>'}</div></div>
+        </div>
+        <div class="name">${esc(baseName(b.path))}</div>
+        <div class="facts">${facts.join("")}</div>
+        <div class="click" data-click="${b.id}">${$("testClicks").checked ? "Click the banner to test its link." : "Clicks open nothing: the clickTag is empty until an ad server sets it."}</div>`;
+      if (b.backup) {
+        const img = document.createElement("img");
+        img.src = URL.createObjectURL(new Blob([b.backup.data], { type: mimeOf(b.backup.path) }));
+        img.title = `${baseName(b.backup.path)}`;
+        card.querySelectorAll(".frame")[1].appendChild(img);
+      }
+      grid.appendChild(card);
+      observer.observe(card.querySelector(".frame[data-id]"));
+    }
+  }
+  const total = banners.length, folders = groups.size;
+  $("summary").innerHTML = `<b>${total} banner${total === 1 ? "" : "s"}</b> in ${folders} folder${folders === 1 ? "" : "s"} · ${noBackup ? `<b>${noBackup}</b> without a backup · ` : "every one with a backup · "}${issues ? `<b>${issues}</b> to look at` : "all within the limits"}${heavyPairs ? ` · <b>${heavyPairs}</b> over 200 KB with the backup` : ""}`;
+}
+
+/* ------------------------------------------------------------ controls --- */
+const tell = msg => frames.forEach(x => { try { x.f.contentWindow.postMessage(msg, "*"); } catch (e) { /* not loaded */ } });
+addEventListener("message", e => {
+  const d = e.data || {};
+  if (d.bp === "len") {
+    const el = document.querySelector(`[data-len="${d.id}"]`);
+    const b = banners.find(x => x.id === d.id);
+    if (!el || !b) return;
+    if (b.loopsInScript) { longest = Math.max(longest, d.ms); return; }
+    if (d.inf) { el.textContent = "loops forever"; el.className = "pill warn"; }
+    else { el.textContent = `stops at ${(d.ms / 1000).toFixed(1)}s`; el.className = d.ms > 30000 ? "pill warn" : "pill ok"; longest = Math.max(longest, d.ms); }
+  }
+  if (d.bp === "open") {
+    const el = document.querySelector(`[data-click="${d.id}"]`);
+    if (el) { el.textContent = `Click opened ${d.u} in ${d.t === "_blank" ? "a new tab" : `"${d.t}"`}.`; el.className = d.u === TEST_URL ? "click ok" : "click err"; }
+  }
+});
+$("play").addEventListener("click", () => { tell({ cmd: "play" }); $("scrub").value = 0; $("time").textContent = "playing"; });
+$("ends").addEventListener("click", () => { tell({ cmd: "end" }); $("scrub").value = 1000; $("time").textContent = "end frames"; });
+$("scrub").addEventListener("input", () => {
+  const ms = (longest || 15000) * $("scrub").value / 1000;
+  tell({ cmd: "seek", t: ms });
+  $("time").textContent = `${(ms / 1000).toFixed(2)}s`;
+});
+$("testClicks").addEventListener("change", render);
+$("folder").addEventListener("change", render);
+$("clear").addEventListener("click", () => { banners = []; images = []; render(); $("folder").innerHTML = ""; });
+const drop = $("drop");
+drop.addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", e => { addFiles([...e.target.files].map(f => ({ path: f.name, file: f }))); e.target.value = ""; });
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", async e => { e.preventDefault(); drop.classList.remove("over"); drop.querySelector("b").textContent = "Reading…"; await addFiles(await readDrop(e.dataTransfer)); drop.querySelector("b").textContent = "Drop zips or a folder here"; });
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => e.preventDefault());
+</script>
+</body>
+</html>

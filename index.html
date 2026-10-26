@@ -893,7 +893,9 @@ function runLength(doc) {
     for (const seg of splitAnimationsRaw(m[1])) {
       const a = parseAnimation(seg);
       if (!a.name) continue;
-      total = Math.max(total, a.delay + a.duration * (a.count === "infinite" ? Infinity : parseFloat(a.count) || 1));
+      // A 0s animation never moves, however often it repeats (0 × Infinity is NaN).
+      const runs = a.count === "infinite" ? Infinity : parseFloat(a.count) || 1;
+      total = Math.max(total, a.delay + (a.duration > 0 ? a.duration * runs : 0));
     }
   return total;
 }

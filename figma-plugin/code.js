@@ -1759,7 +1759,7 @@ figma.ui.onmessage = msg => {
   if (msg.type === "saveDelivery") {
     // A change, merged into what the file holds now, so two people editing the
     // setup at once don't overwrite each other's codes.
-    const cur = readDelivery() || { on: false, prefix: "", versions: {} };
+    const cur = JSON.parse(JSON.stringify(readDelivery() || { on: false, prefix: "", versions: {} }));
     const p = msg.patch || {};
     if ("on" in p) cur.on = !!p.on;
     if ("prefix" in p) cur.prefix = String(p.prefix || "");
@@ -1769,8 +1769,8 @@ figma.ui.onmessage = msg => {
     }
     delivery = cur;
     const json = JSON.stringify(cur);
-    try { figma.root.setPluginData(DELIVERY, json); }
-    catch (e) { figma.clientStorage.setAsync(DELIVERY, json).catch(() => { /* this session only */ }); }
+    try { figma.root.setPluginData(DELIVERY, json); deliveryLocal = false; }
+    catch (e) { deliveryLocal = true; figma.clientStorage.setAsync(localKey(), json).catch(() => { /* this session only */ }); }
   }
   if (msg.type === "ready") postHistory();
   if (msg.type === "focus") {
@@ -1780,15 +1780,26 @@ figma.ui.onmessage = msg => {
 postHistory();
 const DELIVERY = "copyMotion.delivery";
 let delivery = null;
+// True once the file refused a save: from then on this person's copy is the
+// newer one, so the file's older setup mustn't win.
+let deliveryLocal = false;
+// This person's copy for a file that can't be written, kept per file (by name;
+// plugins can't read a file's key) so it doesn't turn up in other files.
+const localKey = () => `${DELIVERY}:${figma.root.name}`;
 // The setup as the file holds it now (or, where the file can't be written,
 // this person's copy).
 function readDelivery() {
+  if (deliveryLocal) return delivery;
   try { const v = figma.root.getPluginData(DELIVERY); if (v) return JSON.parse(v); } catch (e) { /* fall back */ }
   return delivery;
 }
 Promise.resolve()
   .then(() => figma.clientStorage.getAsync("exportAll"))
   .then(v => { exportAll = !!v; }, () => { /* not remembered; default off */ })
-  .then(() => { try { return figma.root.getPluginData(DELIVERY) || figma.clientStorage.getAsync(DELIVERY); } catch (e) { return figma.clientStorage.getAsync(DELIVERY); } })
+  .then(() => {
+    let v = "";
+    try { v = figma.root.getPluginData(DELIVERY); } catch (e) { /* use this person's copy */ }
+    return v || figma.clientStorage.getAsync(localKey()).then(local => { if (local) deliveryLocal = true; return local; });
+  })
   .then(v => { try { delivery = v ? JSON.parse(v) : null; } catch (e) { delivery = null; } }, () => { /* none saved */ })
   .then(() => { post({ type: "settings", exportAll, delivery }); runScan(); });

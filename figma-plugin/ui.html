@@ -783,7 +783,9 @@ function runLength(doc) {
     for (const seg of splitAnimationsRaw(m[1])) {
       const a = parseAnimation(seg);
       if (!a.name) continue;
-      total = Math.max(total, a.delay + a.duration * (a.count === "infinite" ? Infinity : parseFloat(a.count) || 1));
+      // A 0s animation never moves, however often it repeats (0 × Infinity is NaN).
+      const runs = a.count === "infinite" ? Infinity : parseFloat(a.count) || 1;
+      total = Math.max(total, a.delay + (a.duration > 0 ? a.duration * runs : 0));
     }
   return total;
 }
@@ -2314,6 +2316,12 @@ const prefixed = s => (delivery.prefix ? slug(delivery.prefix) + "_" : "") + s;
 const localDate = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 function useDelivery(d) {
   if (d && typeof d === "object") delivery = { on: !!d.on, prefix: String(d.prefix || ""), versions: Object.assign({}, d.versions || {}) };
+  // Changes typed in the last moment haven't reached the file yet: keep them.
+  for (const { patch: p } of pendingSaves.values()) {
+    if ("on" in p) delivery.on = !!p.on;
+    if ("prefix" in p) delivery.prefix = String(p.prefix || "");
+    if (p.version) delivery.versions[p.version.id] = { code: p.version.code, name: p.version.name };
+  }
 }
 
 // Each change goes to the file on its own (a code, the prefix, on/off), merged
@@ -2937,6 +2945,7 @@ function showBanner(id) {
     pv.appendChild(cap);
     const im = document.createElement("img");
     im.src = URL.createObjectURL(new Blob([b.backup.data], { type: "image/jpeg" }));
+    im.onload = im.onerror = () => URL.revokeObjectURL(im.src);
     im.style.cssText = `display:block;width:${Math.round(W * scale)}px;height:${Math.round(H * scale)}px;margin-top:4px;border:1px solid var(--figma-color-border)`;
     pv.appendChild(im);
   }

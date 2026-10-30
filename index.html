@@ -7,186 +7,281 @@
 <meta name="description" content="Figma plugins and browser checks for display banners: Copy Motion, Static Recompose, Check a delivery and GWD clickTag." />
 <style>
   :root{
-    --bg:#1b1b1d; --panel:#242427; --panel2:#2c2c30; --line:#37373c;
+    --bg:#1b1b1d; --panel:#242427; --panel2:#2c2c30; --line:#37373c; --line2:#45454b;
     --text:#ececec; --muted:#9a9aa2; --accent:#4f8fe0; --accent2:#9fd0ff;
-    --warn-bg:#3a2f1e; --warn:#ffce6b; --ok:#7ee0a6; --radius:12px;
+    --warn-bg:#3a2f1e; --warn:#ffce6b; --ok:#7ee0a6; --radius:14px;
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
   a{color:var(--accent2)}
+  a:focus-visible,.btn:focus-visible,.tool:focus-visible{outline:2px solid var(--accent2);outline-offset:2px;border-radius:8px}
+  .in{max-width:980px;margin:0 auto;padding:0 20px}
+
   /* The bar shared by every page of the toolkit. */
-  .site{border-bottom:1px solid var(--line);background:var(--panel)}
-  .site .in{max-width:720px;margin:0 auto;padding:0 16px;display:flex;align-items:center;gap:4px;flex-wrap:wrap;min-height:48px}
-  .site b{margin-right:12px;font-size:15px}
-  .site a{color:var(--muted);text-decoration:none;padding:5px 10px;border-radius:8px;font-size:14px}
-  .site a:hover,.site a.on{color:var(--text);background:var(--panel2)}
-  .wrap{max-width:720px;margin:0 auto;padding:28px 16px 80px}
-  header{display:flex;align-items:center;gap:12px;margin-bottom:6px}
-  .logo{width:30px;height:30px;flex:none}
-  h1{font-size:24px;margin:0;font-weight:800;letter-spacing:-.3px}
-  .sub{color:var(--muted);font-size:14px;margin:2px 0 26px;padding-left:42px}
-  .ver{display:inline-block;background:var(--panel2);border:1px solid var(--line);
-    color:var(--muted);font-size:12px;padding:1px 8px;border-radius:999px;margin-left:6px;vertical-align:middle;font-weight:400;letter-spacing:0}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:16px}
-  .card h2{font-size:15px;margin:0 0 10px;color:var(--accent2);text-transform:uppercase;letter-spacing:.08em}
-  .card h3{font-size:18px;margin:0;font-weight:800}
-  .dl{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
-  .dl p{margin:0;color:var(--muted);font-size:14px;flex:1;min-width:200px}
-  .plugin p.what{margin:6px 0 14px;font-size:15px}
+  .site{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:saturate(1.4) blur(10px);-webkit-backdrop-filter:saturate(1.4) blur(10px);border-bottom:1px solid var(--line)}
+  .site .in{display:flex;align-items:center;gap:6px;min-height:56px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:9px;margin-right:auto;color:var(--text);text-decoration:none;font-weight:800;letter-spacing:-.2px}
+  .brand svg{width:22px;height:22px}
+  .site nav a{color:var(--muted);text-decoration:none;padding:6px 12px;border-radius:999px;font-size:14px;font-weight:600}
+  .site nav a:hover{color:var(--text);background:var(--panel)}
+  .site nav a.on{color:var(--text);background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line)}
+
+  /* Top */
+  .hero{padding:52px 0 26px}
+  .eyebrow{color:var(--accent2);font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;margin:0 0 10px}
+  h1{font-size:40px;line-height:1.1;margin:0 0 12px;font-weight:800;letter-spacing:-.8px}
+  .lede{color:var(--muted);font-size:18px;margin:0;max-width:600px}
+  .beta{display:flex;gap:12px;align-items:flex-start;background:var(--warn-bg);border:1px solid #6b5426;color:var(--warn);
+    border-radius:var(--radius);padding:14px 16px;margin:0 0 36px;font-size:14px}
+  .beta svg{flex:none;margin-top:2px}
+  .beta b{color:#ffe2a8}
+
+  /* Sections */
+  section{margin:0 0 40px}
+  .label{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 14px}
+  .label h2{font-size:13px;margin:0;color:var(--accent2);text-transform:uppercase;letter-spacing:.1em}
+  .label span{color:var(--muted);font-size:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:22px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+
+  /* Plugin cards */
+  .plugin{display:flex;flex-direction:column;gap:14px}
+  .plugin-head{display:flex;align-items:center;gap:14px}
+  .icon{width:46px;height:46px;flex:none;border-radius:12px;background:var(--panel2);border:1px solid var(--line);display:grid;place-items:center}
+  .icon svg{width:26px;height:26px}
+  .plugin h3{font-size:21px;margin:0;font-weight:800;letter-spacing:-.3px}
+  .ver{display:inline-block;background:var(--panel2);border:1px solid var(--line);color:var(--muted);font-size:12px;
+    padding:1px 8px;border-radius:999px;margin-left:8px;vertical-align:3px;font-weight:600;letter-spacing:0}
+  .plugin .what{margin:0;font-size:15px}
+  .feats{list-style:none;margin:0;padding:0;font-size:14px;color:var(--muted);display:grid;gap:6px}
+  .feats li{position:relative;padding-left:22px}
+  .feats li::before{content:"";position:absolute;left:2px;top:6px;width:10px;height:6px;border-left:2px solid var(--ok);border-bottom:2px solid var(--ok);transform:rotate(-45deg)}
+  .plugin .grow{flex:1}
   .btn{border:0;cursor:pointer;font:inherit;font-weight:700;border-radius:10px;padding:12px 18px;color:#fff;
-    background:var(--accent);text-decoration:none;display:inline-flex;align-items:center;gap:8px;transition:filter .15s}
+    background:var(--accent);text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:filter .15s,transform .15s}
   .btn:hover{filter:brightness(1.1)}
-  .btn:focus-visible{outline:2px solid var(--accent2);outline-offset:2px}
-  .btn--ghost{background:var(--panel2);border:1px solid var(--line);color:var(--text)}
-  .links{font-size:14px;margin-top:10px;color:var(--muted)}
+  .btn:active{transform:translateY(1px)}
+  .btn.wide{width:100%}
+  .meta{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+
+  /* Install & update */
   ol.steps{margin:0;padding:0;list-style:none;counter-reset:s}
-  ol.steps li{position:relative;padding:0 0 14px 40px;counter-increment:s}
+  ol.steps li{position:relative;padding:0 0 14px 40px;counter-increment:s;font-size:15px}
   ol.steps li:last-child{padding-bottom:0}
   ol.steps li::before{content:counter(s);position:absolute;left:0;top:0;width:26px;height:26px;border-radius:50%;
     background:var(--panel2);border:1px solid var(--line);color:var(--accent2);font-weight:700;font-size:13px;
     display:flex;align-items:center;justify-content:center}
-  .path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px;background:var(--panel2);
+  .card h3.sub{font-size:16px;margin:0 0 14px;font-weight:800}
+  .card .note{color:var(--muted);font-size:14px;margin:-6px 0 14px}
+  .split{display:grid;grid-template-columns:1fr 1px 1fr;gap:26px}
+  .split .rule{background:var(--line)}
+  .path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;background:var(--panel2);
     border:1px solid var(--line);border-radius:6px;padding:1px 6px;white-space:nowrap}
   .menu{font-weight:600}
-  .tip{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:10px 12px;font-size:14px;margin-top:12px}
-  .muted{color:var(--muted)}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .grid h4{font-size:14px;margin:0 0 6px}
-  .grid ul{margin:0;padding-left:18px;font-size:14px}
-  .good h4{color:var(--ok)} .meh h4{color:var(--warn)}
-  .tools{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .tool{display:block;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px;text-decoration:none;color:var(--text)}
-  .tool:hover{border-color:var(--accent)}
-  .tool b{display:block;color:var(--accent2);margin-bottom:4px}
-  .tool span{font-size:14px;color:var(--muted)}
+
+  /* Browser tools */
+  .tool{display:flex;gap:14px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:20px;text-decoration:none;color:var(--text);transition:border-color .15s,background .15s}
+  .tool:hover{border-color:var(--accent);background:#27272b}
+  .tool b{display:block;font-size:17px;margin-bottom:4px}
+  .tool span{display:block;font-size:14px;color:var(--muted)}
+  .tool .go{margin-left:auto;align-self:center;color:var(--accent2);font-size:20px;transition:transform .15s}
+  .tool:hover .go{transform:translateX(3px)}
+
+  /* Copy Motion details */
+  .fit h4{font-size:14px;margin:0 0 8px}
+  .fit .good h4{color:var(--ok)} .fit .meh h4{color:var(--warn)}
+  .fit ul{margin:0 0 16px;padding-left:18px;font-size:14px}
+  .fit ul:last-child{margin-bottom:0}
+  .fit li{margin:3px 0}
   .rel{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
-  .rel:first-of-type{border-top:0;padding-top:0;margin-top:0}
+  .rel:first-child{border-top:0;padding-top:0;margin-top:0}
   .rel b{font-size:15px} .rel .date{color:var(--muted);font-size:13px;margin-left:6px}
-  .rel p{margin:4px 0 6px;font-size:14px} .rel ul{margin:0;padding-left:18px;font-size:14px;color:var(--muted)}
-  .hidden{display:none}
-  .beta{display:flex;gap:12px;align-items:flex-start;background:var(--warn-bg);border:1px solid #6b5426;color:var(--warn);
-    border-radius:var(--radius);padding:14px 16px;margin-bottom:16px;font-size:14px}
-  .beta svg{flex:none;margin-top:2px}
-  .beta b{color:#ffe2a8}
-  footer{color:var(--muted);font-size:13px;text-align:center;margin-top:28px}
-  @media (max-width:560px){ .grid,.tools{grid-template-columns:1fr} .sub{padding-left:0} .path{white-space:normal} }
+  .rel p{margin:4px 0 6px;font-size:14px} .rel ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--muted)}
+  .small{font-size:14px;color:var(--muted);margin:14px 0 0}
+
+  footer{border-top:1px solid var(--line);color:var(--muted);font-size:13px;padding:22px 0 50px}
+  footer .in{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+
+  @media (max-width:760px){
+    .two,.split{grid-template-columns:1fr}
+    .split .rule{display:none}
+    h1{font-size:31px} .hero{padding:34px 0 20px} .lede{font-size:16px}
+    .path{white-space:normal}
+    .site nav{width:100%;display:flex;gap:4px;padding-bottom:8px;overflow-x:auto}
+  }
 </style>
 </head>
 <body>
-<nav class="site"><div class="in">
-  <b>Figma Toolkit</b>
-  <a class="on" href="./">Plugins</a>
-  <a href="preview.html">Check a delivery</a>
-  <a href="gwd.html">GWD clickTag</a>
-</div></nav>
-<div class="wrap">
-  <header>
-    <svg class="logo" viewBox="0 0 30 30" aria-hidden="true">
-      <rect x="1" y="1" width="17" height="11" rx="2" fill="none" stroke="#9fd0ff" stroke-width="2"/>
-      <rect x="1" y="15" width="12" height="14" rx="2" fill="none" stroke="#4f8fe0" stroke-width="2"/>
-      <path d="M18 17.5v9l7.5-4.5z" fill="none" stroke="#4f8fe0" stroke-width="2" stroke-linejoin="round"/>
-      <rect x="21" y="1" width="8" height="11" rx="2" fill="none" stroke="#9fd0ff" stroke-width="2"/>
+<header class="site"><div class="in">
+  <a class="brand" href="./">
+    <svg viewBox="0 0 30 30" aria-hidden="true">
+      <rect x="1" y="1" width="17" height="11" rx="2" fill="none" stroke="#9fd0ff" stroke-width="2.4"/>
+      <rect x="1" y="15" width="12" height="14" rx="2" fill="none" stroke="#4f8fe0" stroke-width="2.4"/>
+      <path d="M18 17.5v9l7.5-4.5z" fill="none" stroke="#4f8fe0" stroke-width="2.4" stroke-linejoin="round"/>
+      <rect x="21" y="1" width="8" height="11" rx="2" fill="none" stroke="#9fd0ff" stroke-width="2.4"/>
     </svg>
+    Figma Toolkit
+  </a>
+  <nav aria-label="Toolkit">
+    <a class="on" href="./" aria-current="page">Plugins</a>
+    <a href="preview.html">Check a delivery</a>
+    <a href="gwd.html">GWD clickTag</a>
+  </nav>
+</div></header>
+
+<main class="in">
+  <div class="hero">
+    <p class="eyebrow">For display banner teams</p>
     <h1>Figma Toolkit</h1>
-  </header>
-  <p class="sub">Figma plugins and browser checks for display banners.</p>
+    <p class="lede">Figma plugins for building banner suites, and browser checks for what you deliver.</p>
+  </div>
 
   <div class="beta" role="note">
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 1.5 17 16H1L9 1.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 7v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13.2" r=".9" fill="currentColor"/></svg>
     <div><b>Still in development.</b> These tools are being built and tested, and their output can be wrong: motion that doesn't match Figma, a banner that ends on the wrong frame, a check that misses something. <b>Check every banner yourself</b> (playback, end frame, click-through, file sizes and backup image) against the placement's own specs before you deliver anything. The automated checks help, but they don't replace your review. Provided as is.</div>
   </div>
 
-  <section class="card plugin" aria-labelledby="cm-h">
-    <h2>Plugin</h2>
-    <h3 id="cm-h">Copy Motion <span class="ver" id="cmVer">latest</span></h3>
-    <p class="what">Animate one banner with Figma Motion, copy that animation across the suite, then export each banner as an HTML5 zip with its backup image, aiming at Google's display specs.</p>
-    <div class="dl">
-      <p id="cmNote">The newest version, for the Figma desktop app.</p>
-      <a class="btn" id="cmBtn" href="https://github.com/hcrocker-sys/figma-toolkit/releases/latest/download/Copy-Motion.zip">
-        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13h12" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span id="cmLabel">Download Copy Motion</span></a>
+  <section aria-labelledby="plugins-h">
+    <div class="label"><h2 id="plugins-h">Plugins</h2><span>For the Figma desktop app</span></div>
+    <div class="two">
+      <article class="card plugin" aria-labelledby="cm-h">
+        <div class="plugin-head">
+          <div class="icon"><svg viewBox="0 0 26 26" aria-hidden="true">
+            <rect x="2" y="5" width="12" height="16" rx="2" fill="none" stroke="#4f8fe0" stroke-width="2"/>
+            <path d="M17 9l5 4-5 4" fill="none" stroke="#9fd0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M6 13h4" stroke="#9fd0ff" stroke-width="2" stroke-linecap="round"/></svg></div>
+          <h3 id="cm-h">Copy Motion<span class="ver" id="cmVer">latest</span></h3>
+        </div>
+        <p class="what">Animate one banner, copy its motion across the suite, then export every banner as HTML5.</p>
+        <ul class="feats">
+          <li>Copies Figma Motion by matching copy, images and components</li>
+          <li>HTML5 zips with an empty clickTag and a backup JPG each</li>
+          <li>Aims at Google's specs: 150 KB, stops by 15 s</li>
+          <li>Restore point before every change</li>
+        </ul>
+        <div class="grow"></div>
+        <a class="btn wide" id="cmBtn" href="https://github.com/hcrocker-sys/figma-toolkit/releases/latest/download/Copy-Motion.zip">
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13h12" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span id="cmLabel">Download Copy Motion</span></a>
+        <div class="meta"><span id="cmNote">Newest version</span><a href="#copy-motion">What converts</a></div>
+      </article>
+
+      <article class="card plugin" aria-labelledby="sr-h">
+        <div class="plugin-head">
+          <div class="icon"><svg viewBox="0 0 30 30" aria-hidden="true">
+            <rect x="1" y="1" width="17" height="11" rx="2" fill="none" stroke="#9fd0ff" stroke-width="2"/>
+            <rect x="1" y="15" width="9" height="14" rx="2" fill="none" stroke="#4f8fe0" stroke-width="2"/>
+            <rect x="13" y="15" width="16" height="14" rx="2" fill="none" stroke="#4f8fe0" stroke-width="2"/>
+            <rect x="21" y="1" width="8" height="11" rx="2" fill="none" stroke="#9fd0ff" stroke-width="2"/></svg></div>
+          <h3 id="sr-h">Static Recompose<span class="ver" id="srVer">latest</span></h3>
+        </div>
+        <p class="what">Design one ad, get every other size, plus linked language versions.</p>
+        <ul class="feats">
+          <li>Resizes one design into every empty size frame</li>
+          <li>Pass, review or blocked checks on every size</li>
+          <li>Linked language versions with a content editor</li>
+          <li>PNG export with a validation report</li>
+        </ul>
+        <div class="grow"></div>
+        <a class="btn wide" id="srBtn" href="https://github.com/hcrocker-sys/static-recompose/releases/latest/download/Static-Recompose-plugin.zip">
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13h12" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span id="srLabel">Download Static Recompose</span></a>
+        <div class="meta"><span id="srNote">Newest version</span><a href="../static-recompose/">Details and what's new</a></div>
+      </article>
     </div>
   </section>
 
-  <section class="card plugin" aria-labelledby="sr-h">
-    <h2>Plugin</h2>
-    <h3 id="sr-h">Static Recompose <span class="ver" id="srVer">latest</span></h3>
-    <p class="what">Design one ad, get every other size, plus linked language versions.</p>
-    <div class="dl">
-      <p id="srNote">The newest version, for the Figma desktop app.</p>
-      <a class="btn" id="srBtn" href="https://github.com/hcrocker-sys/static-recompose/releases/latest/download/Static-Recompose-plugin.zip">
-        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13h12" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span id="srLabel">Download Static Recompose</span></a>
+  <section aria-labelledby="setup-h">
+    <div class="label"><h2 id="setup-h">Install and update</h2><span>Same steps for both plugins</span></div>
+    <div class="card split">
+      <div>
+        <h3 class="sub">First install</h3>
+        <ol class="steps">
+          <li>Unzip the download. You get a folder named after the plugin, like <span class="path">Copy Motion</span>.</li>
+          <li>Move it somewhere permanent, like <span class="path">Documents/Figma Plugins</span>. Figma runs the plugin from there, so don't leave it in Downloads.</li>
+          <li>In the <b>Figma desktop app</b>: <span class="menu">Plugins → Development → Import plugin from manifest…</span> and pick <span class="path">manifest.json</span> in that folder.</li>
+          <li>Run it from <span class="menu">Plugins → Development</span>.</li>
+        </ol>
+      </div>
+      <div class="rule" aria-hidden="true"></div>
+      <div>
+        <h3 class="sub">Updating</h3>
+        <p class="note">When a new version is out, the plugin shows a notice at the top of its panel.</p>
+        <ol class="steps">
+          <li>Download the new version above and unzip it.</li>
+          <li>Drag its files into <b>the folder you installed from</b> and choose <b>Replace</b>.</li>
+          <li>Close and reopen the plugin. No need to import it again.</li>
+        </ol>
+      </div>
     </div>
-    <div class="links">Which designs it suits, and what's new: <a href="../static-recompose/">its own page</a>.</div>
   </section>
 
-  <section class="card" aria-labelledby="inst-h">
-    <h2 id="inst-h">First install</h2>
-    <ol class="steps">
-      <li>Unzip the download. You get a folder named after the plugin, like <span class="path">Copy Motion</span>.</li>
-      <li>Move that folder somewhere permanent, for example <span class="path">Documents/Figma Plugins</span>. Figma runs the plugin from this folder, so don't leave it in Downloads.</li>
-      <li>In the <b>Figma desktop app</b>: <span class="menu">Plugins → Development → Import plugin from manifest…</span> and pick <span class="path">manifest.json</span> in that folder.</li>
-      <li>Run it from <span class="menu">Plugins → Development</span>.</li>
-    </ol>
-  </section>
-
-  <section class="card" aria-labelledby="upd-h">
-    <h2 id="upd-h">Updating</h2>
-    <p class="muted" style="margin:0 0 12px;font-size:14px">When a new version is out, the plugin shows a notice at the top of its panel. Your version is in the panel too.</p>
-    <ol class="steps">
-      <li>Download the new version above and unzip it.</li>
-      <li>Drag the files from the new folder into <b>the folder you installed the plugin from</b> and choose <b>Replace</b>.</li>
-      <li>Close and reopen the plugin. No need to import it again.</li>
-    </ol>
-  </section>
-
-  <section class="card" aria-labelledby="fit-h">
-    <h2 id="fit-h">Copy Motion: what converts</h2>
-    <div class="grid">
-      <div class="good"><h4>Works well</h4><ul>
-        <li>Fades and slides (matched to Figma's playback)</li>
-        <li>Scale, rotation, diagonal and custom moves (flagged so you compare with Figma)</li>
-        <li>Hand-placed position, opacity, rotation and scale keyframes</li>
-        <li>Any banner size; photos, cutouts and vectors</li>
-      </ul></div>
-      <div class="meh"><h4>Not yet</h4><ul>
-        <li>Size, path-draw and per-letter text animation</li>
-        <li>Animated colour, blur or corner radius</li>
-        <li>Timelines over about 3 s at 2 plays: choose <b>Plays once</b> (the banner says what fits)</li>
-      </ul></div>
+  <section aria-labelledby="tools-h">
+    <div class="label"><h2 id="tools-h">In the browser</h2><span>Nothing is uploaded</span></div>
+    <div class="two">
+      <a class="tool" href="preview.html">
+        <div class="icon"><svg viewBox="0 0 26 26" aria-hidden="true">
+          <rect x="2" y="4" width="22" height="16" rx="2" fill="none" stroke="#4f8fe0" stroke-width="2"/>
+          <path d="M8 12.5l3 3 6-6" fill="none" stroke="#7ee0a6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div><b>Check a delivery</b><span>Drop a delivery: every banner plays beside its backup, with weight, length, clickTag and package checks. Figma or GWD banners.</span></div>
+        <span class="go" aria-hidden="true">→</span>
+      </a>
+      <a class="tool" href="gwd.html">
+        <div class="icon"><svg viewBox="0 0 26 26" aria-hidden="true">
+          <path d="M9 7l-6 6 6 6M17 7l6 6-6 6" fill="none" stroke="#4f8fe0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M14.5 5l-3 16" stroke="#9fd0ff" stroke-width="2" stroke-linecap="round"/></svg></div>
+        <div><b>GWD clickTag</b><span>Convert Google Web Designer banners to a standard IAB clickTag with no hardcoded URLs, and check them.</span></div>
+        <span class="go" aria-hidden="true">→</span>
+      </a>
     </div>
-    <p class="muted" style="margin:12px 0 0;font-size:14px">It only works on the page that's open and only changes animation, with a restore point before every change. Locked layers and main components are left alone. Every banner gets its checks; look over every one before handing off.</p>
   </section>
 
-  <section class="card" aria-labelledby="tools-h">
-    <h2 id="tools-h">In the browser</h2>
-    <div class="tools">
-      <a class="tool" href="preview.html"><b>Check a delivery</b><span>Drop a delivery: every banner plays beside its backup, with weight, length, clickTag and package checks. Figma or GWD banners.</span></a>
-      <a class="tool" href="gwd.html"><b>GWD clickTag</b><span>Convert Google Web Designer banners to a standard IAB clickTag with no hardcoded URLs, and check them.</span></a>
+  <section id="copy-motion" aria-labelledby="cmd-h">
+    <div class="label"><h2 id="cmd-h">Copy Motion in detail</h2><span><a href="https://github.com/hcrocker-sys/figma-toolkit/releases">All releases</a></span></div>
+    <div class="two">
+      <div class="card fit">
+        <h3 class="sub">What converts</h3>
+        <div class="good"><h4>Works well</h4><ul>
+          <li>Fades and slides, matched to Figma's playback</li>
+          <li>Scale, rotation, diagonal and custom moves (flagged so you compare with Figma)</li>
+          <li>Hand-placed position, opacity, rotation and scale keyframes</li>
+          <li>Any banner size; photos, cutouts and vectors</li>
+        </ul></div>
+        <div class="meh"><h4>Not yet</h4><ul>
+          <li>Size, path-draw and per-letter text animation</li>
+          <li>Animated colour, blur or corner radius</li>
+          <li>Timelines over about 3 s at 2 plays: choose <b>Plays once</b> (the banner says what fits)</li>
+        </ul></div>
+        <p class="small">It only works on the page that's open and only changes animation. Locked layers and main components are left alone.</p>
+      </div>
+      <div class="card">
+        <h3 class="sub">What's new</h3>
+        <div id="history"><p class="small" style="margin:0">See <a href="https://github.com/hcrocker-sys/figma-toolkit/releases">all releases</a>.</p></div>
+      </div>
     </div>
-    <p class="muted" style="margin:12px 0 0;font-size:14px">Both run entirely in your browser. Nothing is uploaded.</p>
   </section>
+</main>
 
-  <section class="card" aria-labelledby="new-h">
-    <h2 id="new-h">What's new in Copy Motion</h2>
-    <div id="history"><p class="muted" style="margin:0">See <a href="https://github.com/hcrocker-sys/figma-toolkit/releases">all releases</a>.</p></div>
-  </section>
+<footer><div class="in">
+  <span>Figma Toolkit · in development, provided as is</span>
+  <span>Older versions: <a href="https://github.com/hcrocker-sys/figma-toolkit/releases">Copy Motion</a> · <a href="https://github.com/hcrocker-sys/static-recompose/releases">Static Recompose</a></span>
+</div></footer>
 
-  <footer>Older versions: <a href="https://github.com/hcrocker-sys/figma-toolkit/releases">Copy Motion</a> · <a href="https://github.com/hcrocker-sys/static-recompose/releases">Static Recompose</a></footer>
-</div>
 <script>
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const when = d => d ? new Date(d + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
   // Each plugin publishes its version file with every release.
   const show = (file, id, name, history) => fetch(file, { cache: 'no-store' }).then(r => r.json()).then(v => {
     document.getElementById(id + 'Ver').textContent = 'v' + v.version;
     document.getElementById(id + 'Label').textContent = `Download ${name} v${v.version}`;
-    document.getElementById(id + 'Note').textContent = (v.date ? 'Released ' + v.date + '. ' : '') + 'For the Figma desktop app.';
+    document.getElementById(id + 'Note').textContent = v.date ? `Released ${when(v.date)}` : 'Newest version';
     if (v.download) document.getElementById(id + 'Btn').href = v.download;
-    if (history && v.history && v.history.length) document.getElementById('history').innerHTML = v.history.slice(0, 6).map(h =>
-      `<div class="rel"><b>v${esc(h.version)}</b><span class="date">${esc(h.date || '')}</span><p>${esc(h.summary)}</p>` +
+    if (history && v.history && v.history.length) document.getElementById('history').innerHTML = v.history.slice(0, 4).map(h =>
+      `<div class="rel"><b>v${esc(h.version)}</b><span class="date">${esc(when(h.date))}</span><p>${esc(h.summary)}</p>` +
       (h.notes && h.notes.length ? `<ul>${h.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : '') + '</div>').join('');
   }).catch(() => {});
   show('copy-motion.json', 'cm', 'Copy Motion', true);

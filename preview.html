@@ -11,14 +11,15 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; -webkit-font-smoothing: antialiased; }
-  main { max-width: 1400px; margin: 0 auto; padding: 20px 16px 60px; }
-  h1 { font-size: 20px; margin: 0 0 2px; }
+  main { max-width: 1400px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 30px; line-height: 1.15; margin: 0 0 6px; font-weight: 800; letter-spacing: -.5px; }
   .sub { color: var(--muted); margin: 0 0 16px; }
-  #drop { border: 2px dashed var(--line); border-radius: 10px; background: var(--panel); padding: 28px 16px; text-align: center; cursor: pointer; }
-  #drop.over { border-color: var(--accent); }
-  #drop b { display: block; font-size: 15px; margin-bottom: 4px; }
+  #drop { border: 2px dashed var(--line); border-radius: 14px; background: var(--panel); padding: 40px 16px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+  #drop:hover, #drop.over { border-color: var(--accent); background: #27272b; }
+  #drop svg { display: block; margin: 0 auto 10px; }
+  #drop b { display: block; font-size: 16px; margin-bottom: 4px; }
   #drop span { color: var(--muted); }
-  .bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center;
+  .bar { position: sticky; top: 57px; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center;
          background: var(--bg); padding: 12px 0; border-bottom: 1px solid var(--line); margin-top: 16px; }
   .bar.hidden, .hidden { display: none !important; }
   button, select { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line);
@@ -50,12 +51,17 @@
   .click.ok { color: var(--ok); }
   .err { color: var(--bad); }
   .legend { color: var(--muted); font-size: 12px; margin-top: 10px; }
-  /* The bar shared by every page of the site. */
-  .site { border-bottom: 1px solid var(--line); background: var(--panel); }
-  .site .in { max-width: 1400px; margin: 0 auto; padding: 0 16px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-height: 48px; }
-  .site b { margin-right: 14px; font-size: 14px; }
-  .site a { color: var(--muted); text-decoration: none; padding: 5px 10px; border-radius: 6px; font-size: 13px; }
-  .site a:hover, .site a.on { color: var(--text); background: var(--panel-2); }
+  /* The bar shared by every page of the toolkit. */
+  .site { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--line); }
+  .site .in { max-width: 1400px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; gap: 6px; min-height: 56px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 9px; margin-right: auto; color: var(--text); text-decoration: none; font-weight: 800; font-size: 16px; letter-spacing: -.2px; }
+  .brand svg { width: 22px; height: 22px; }
+  .site nav a { color: var(--muted); text-decoration: none; padding: 6px 12px; border-radius: 999px; font-size: 14px; font-weight: 600; }
+  .site nav a:hover { color: var(--text); background: var(--panel); }
+  .site nav a.on { color: var(--text); background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line); }
+  .eyebrow { color: var(--accent2); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; margin: 0 0 8px; }
+  @media (max-width: 760px) { .site { position: static; } .site nav { width: 100%; display: flex; gap: 4px; padding-bottom: 8px; overflow-x: auto; } .bar { top: 0; } }
   /* In development: the toolkit's notice, as on its home page. */
   .beta{display:flex;gap:12px;align-items:flex-start;background:#3a2f1e;border:1px solid #6b5426;color:#ffce6b;
     border-radius:12px;padding:14px 16px;margin:0 0 18px;font-size:14px;line-height:1.5}
@@ -64,17 +70,28 @@
 </style>
 </head>
 <body>
-<nav class="site"><div class="in">
-  <b>Figma Toolkit</b>
-  <a href="./">Plugins</a>
-  <a class="on" href="preview.html">Check a delivery</a>
-  <a href="gwd.html">GWD clickTag</a>
-</div></nav>
+<header class="site"><div class="in">
+  <a class="brand" href="./">
+    <svg viewBox="0 0 30 30" aria-hidden="true">
+      <rect x="1" y="1" width="17" height="11" rx="2" fill="none" stroke="#9fd0ff" stroke-width="2.4"/>
+      <rect x="1" y="15" width="12" height="14" rx="2" fill="none" stroke="#4f8fe0" stroke-width="2.4"/>
+      <path d="M18 17.5v9l7.5-4.5z" fill="none" stroke="#4f8fe0" stroke-width="2.4" stroke-linejoin="round"/>
+      <rect x="21" y="1" width="8" height="11" rx="2" fill="none" stroke="#9fd0ff" stroke-width="2.4"/>
+    </svg>
+    Figma Toolkit
+  </a>
+  <nav aria-label="Toolkit">
+    <a href="./">Plugins</a>
+    <a class="on" aria-current="page" href="preview.html">Check a delivery</a>
+    <a href="gwd.html">GWD clickTag</a>
+  </nav>
+</div></header>
 <main>
-  <div class="beta" role="note"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 1.5 17 16H1L9 1.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 7v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13.2" r=".9" fill="currentColor"/></svg><div><b>Still in development.</b> This is an internal tool that's still being tested, and its checks can miss things. A clean result here doesn't mean a delivery is right: check every banner yourself, against the placement's own specs. Provided as is, with no guarantee.</div></div>
+  <p class="eyebrow">Browser tool</p>
   <h1>Check a delivery</h1>
   <p class="sub">Drop a delivery zip, banner zips or a folder: every banner plays beside its backup image, with its weight, length, click and package checked. Works for Figma and Google Web Designer banners. Everything stays on your computer.</p>
-  <div id="drop"><b>Drop zips or a folder here</b><span>or click to choose files. A delivery zip of folders, a zip of zips, banner zips, or unzipped banner folders all work.</span></div>
+  <div class="beta" role="note"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 1.5 17 16H1L9 1.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 7v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13.2" r=".9" fill="currentColor"/></svg><div><b>Still in development.</b> This is an internal tool that's still being tested, and its checks can miss things. A clean result here doesn't mean a delivery is right: check every banner yourself, against the placement's own specs. Provided as is, with no guarantee.</div></div>
+  <div id="drop"><svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="#9fd0ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Drop zips or a folder here</b><span>or click to choose files. A delivery zip of folders, a zip of zips, banner zips, or unzipped banner folders all work.</span></div>
   <input type="file" id="file" multiple accept=".zip,.jpg,.jpeg,.png,.gif" class="hidden">
 
   <div class="bar hidden" id="bar">

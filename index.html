@@ -40,7 +40,7 @@
   .beta b{color:#ffe2a8}
 
   /* Sections */
-  section{margin:0 0 40px}
+  section{margin:0 0 40px;scroll-margin-top:76px}
   .label{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 14px}
   .label h2{font-size:13px;margin:0;color:var(--accent2);text-transform:uppercase;letter-spacing:.1em}
   .label span{color:var(--muted);font-size:14px}
@@ -103,6 +103,12 @@
   .rel p{margin:4px 0 6px;font-size:14px} .rel ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--muted)}
   .small{font-size:14px;color:var(--muted);margin:14px 0 0}
 
+  [hidden]{display:none!important}
+  .tabs{display:inline-flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px;margin:0 0 14px}
+  .tabs button{font:inherit;font-size:14px;font-weight:700;color:var(--muted);background:none;border:0;border-radius:999px;padding:7px 14px;cursor:pointer}
+  .tabs button:hover{color:var(--text)}
+  .tabs button[aria-selected="true"]{color:var(--text);background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line)}
+  .tabs button:focus-visible{outline:2px solid var(--accent2);outline-offset:2px}
   footer{border-top:1px solid var(--line);color:var(--muted);font-size:13px;padding:22px 0 50px}
   footer .in{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 
@@ -167,7 +173,7 @@
         <a class="btn wide" id="cmBtn" href="https://github.com/hcrocker-sys/figma-toolkit/releases/latest/download/Copy-Motion.zip">
           <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13h12" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span id="cmLabel">Download Copy Motion</span></a>
-        <div class="meta"><span id="cmNote">Newest version</span><a href="#copy-motion">What converts</a></div>
+        <div class="meta"><span id="cmNote">Newest version</span><a href="#details" data-tab="cm">Details and what's new</a></div>
       </article>
 
       <article class="card plugin" aria-labelledby="sr-h">
@@ -190,7 +196,7 @@
         <a class="btn wide" id="srBtn" href="https://github.com/hcrocker-sys/static-recompose/releases/latest/download/Static-Recompose-plugin.zip">
           <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13h12" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span id="srLabel">Download Static Recompose</span></a>
-        <div class="meta"><span id="srNote">Newest version</span><a href="../static-recompose/">Details and what's new</a></div>
+        <div class="meta"><span id="srNote">Newest version</span><a href="#details" data-tab="sr">Details and what's new</a></div>
       </article>
     </div>
   </section>
@@ -240,11 +246,16 @@
     </div>
   </section>
 
-  <section id="copy-motion" aria-labelledby="cmd-h">
-    <div class="label"><h2 id="cmd-h">Copy Motion in detail</h2><span><a href="https://github.com/hcrocker-sys/figma-toolkit/releases">All releases</a></span></div>
-    <div class="two">
+  <section id="details" aria-labelledby="det-h">
+    <div class="label"><h2 id="det-h">Plugin details</h2><span>What each one handles, and what's changed</span></div>
+    <div class="tabs" role="tablist" aria-label="Plugin">
+      <button role="tab" id="t-cm" aria-controls="p-cm" aria-selected="true">Copy Motion</button>
+      <button role="tab" id="t-sr" aria-controls="p-sr" aria-selected="false" tabindex="-1">Static Recompose</button>
+    </div>
+
+    <div class="two" role="tabpanel" id="p-cm" aria-labelledby="t-cm">
       <div class="card fit">
-        <h3 class="sub">What converts</h3>
+        <h3 class="sub">What it handles</h3>
         <div class="good"><h4>Works well</h4><ul>
           <li>Fades and slides, matched to Figma's playback</li>
           <li>Scale, rotation, diagonal and custom moves (flagged so you compare with Figma)</li>
@@ -260,7 +271,29 @@
       </div>
       <div class="card">
         <h3 class="sub">What's new</h3>
-        <div id="history"><p class="small" style="margin:0">See <a href="https://github.com/hcrocker-sys/figma-toolkit/releases">all releases</a>.</p></div>
+        <div id="cmHistory"><p class="small" style="margin:0">See <a href="https://github.com/hcrocker-sys/figma-toolkit/releases">all releases</a>.</p></div>
+      </div>
+    </div>
+
+    <div class="two" role="tabpanel" id="p-sr" aria-labelledby="t-sr" hidden>
+      <div class="card fit">
+        <h3 class="sub">What it handles</h3>
+        <div class="good"><h4>Works well</h4><ul>
+          <li>A photo on one side, and the logo, headline and button on the other</li>
+          <li>One headline and one button</li>
+          <li>Any brand, colours, fonts or sizes</li>
+        </ul></div>
+        <div class="meh"><h4>Not yet</h4><ul>
+          <li>Text over a full-bleed photo</li>
+          <li>No photo, or a centred product shot</li>
+          <li>Photo on top, copy below</li>
+          <li>Extra lines (subheadline, legal), added by hand</li>
+        </ul></div>
+        <p class="small">Every size is labelled pass, review or blocked; look over every one before handing off. More on <a href="../static-recompose/">its own page</a>.</p>
+      </div>
+      <div class="card">
+        <h3 class="sub">What's new</h3>
+        <div id="srHistory"><p class="small" style="margin:0">See <a href="https://github.com/hcrocker-sys/static-recompose/releases">all releases</a>.</p></div>
       </div>
     </div>
   </section>
@@ -275,17 +308,34 @@
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const when = d => d ? new Date(d + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
   // Each plugin publishes its version file with every release.
-  const show = (file, id, name, history) => fetch(file, { cache: 'no-store' }).then(r => r.json()).then(v => {
+  const show = (file, id, name) => fetch(file, { cache: 'no-store' }).then(r => r.json()).then(v => {
     document.getElementById(id + 'Ver').textContent = 'v' + v.version;
     document.getElementById(id + 'Label').textContent = `Download ${name} v${v.version}`;
     document.getElementById(id + 'Note').textContent = v.date ? `Released ${when(v.date)}` : 'Newest version';
     if (v.download) document.getElementById(id + 'Btn').href = v.download;
-    if (history && v.history && v.history.length) document.getElementById('history').innerHTML = v.history.slice(0, 4).map(h =>
+    if (v.history && v.history.length) document.getElementById(id + 'History').innerHTML = v.history.slice(0, 4).map(h =>
       `<div class="rel"><b>v${esc(h.version)}</b><span class="date">${esc(when(h.date))}</span><p>${esc(h.summary)}</p>` +
       (h.notes && h.notes.length ? `<ul>${h.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : '') + '</div>').join('');
   }).catch(() => {});
-  show('copy-motion.json', 'cm', 'Copy Motion', true);
-  show('../static-recompose/version.json', 'sr', 'Static Recompose', false);
+  show('copy-motion.json', 'cm', 'Copy Motion');
+  show('../static-recompose/version.json', 'sr', 'Static Recompose');
+
+  // Details: one plugin at a time.
+  const tabs = ['cm', 'sr'];
+  const pick = (id, focus) => tabs.forEach(t => {
+    const on = t === id, b = document.getElementById('t-' + t);
+    b.setAttribute('aria-selected', on); b.tabIndex = on ? 0 : -1;
+    document.getElementById('p-' + t).hidden = !on;
+    if (on && focus) b.focus();
+  });
+  tabs.forEach((t, i) => {
+    const b = document.getElementById('t-' + t);
+    b.addEventListener('click', () => pick(t));
+    b.addEventListener('keydown', e => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') pick(tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length], true);
+    });
+  });
+  document.querySelectorAll('a[data-tab]').forEach(a => a.addEventListener('click', () => pick(a.dataset.tab)));
 </script>
 </body>
 </html>

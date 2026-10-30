@@ -1,151 +1,76 @@
-# Figma → HTML5 Ad Converter
+# Copy Motion
 
-Turns an **animated SVG export from Figma** into a delivery-ready HTML5 display ad zip.
+A Figma plugin that copies animation across a banner suite, then exports every banner as
+an ad-ready HTML5 zip with its backup image, built to Google's display specs (DV360,
+Campaign Manager 360, Ad Manager).
 
-**→ [Open the tool](https://crockerfilm.github.io/figma-html5/)**
+**→ [Download and install](https://crockerfilm.github.io/figma-html5/)**
 
-Drop an SVG in. It is checked against spec, fixed where a fix is deterministic, and
-flagged where a human has to change something in Figma. If anything is flagged, the
-download stays disabled — so what comes out is either to spec or not at all.
+The site also has two tools that run in the browser, with nothing uploaded:
 
-## Everything runs in your browser
+| Page | What it's for |
+|---|---|
+| [Plugin](https://crockerfilm.github.io/figma-html5/) | Download, install and update steps, and what's new in each version |
+| [Check a delivery](https://crockerfilm.github.io/figma-html5/preview.html) | Drop a delivery (zips, folders, a zip of zips): every banner plays beside its backup, with weight, length, clickTag, ad.size, external loads and file types checked. Works for Figma and Google Web Designer banners |
+| [GWD clickTag](https://crockerfilm.github.io/figma-html5/gwd.html) | Converts Google Web Designer banners to a standard IAB clickTag with no hardcoded URLs, and checks them |
 
-No upload, no server, no analytics, no storage. The file never leaves your machine —
-parsing, image recompression and zipping all happen locally. Safe for unreleased client
-work. The preview runs in a sandboxed iframe on its own origin.
+## Install and update
 
-## Exporting from Figma
+Figma desktop app → **Plugins → Development → Import plugin from manifest…** → pick
+`manifest.json` in the unzipped **Copy Motion** folder. To update, replace that folder's
+files with the new ones; Figma picks them up the next time the plugin runs. The panel's
+footer shows its version. Full details are in [figma-plugin/README.md](figma-plugin/README.md).
 
-In the export panel:
+## What it touches
 
-| Setting | Value | Why |
-|---|---|---|
-| Tab | **Animated** | The Static tab produces no `@keyframes` and the tool will reject it |
-| Format | SVG | |
-| Ignore overlapping layers | **On** | Turning it off silently downgrades the export to static |
-| Outline text | **On** | Otherwise the ad depends on fonts that may not load |
-| Include "id" attribute | Off | The animated export already emits the ids its animation needs |
+Only the page that's open, and only animation: layers are never moved, edited or deleted.
+Every change is previewed first and saves a restore point on each layer plus a Figma
+version. Locked layers and main components are left alone. Export works on a temporary
+copy, so the banners themselves aren't changed. The plugin has no network access.
 
-## Best practice when building the file
+## Designing banners for it
 
-These are the things that actually decide whether an ad fits, ranked by how much
-difference they make.
+1. **End on your end card.** The animation stops on its last frame, and so does the
+   backup image. A banner that ends blank, or back on its first frame, is flagged.
+2. **Keep the animation short.** Everything must stop within 15 s. The default is 2 plays
+   with an 8 s pause, which suits animations of about 3 s; a longer one needs *Plays once*
+   (the banner says what fits).
+3. **Use transparency only where needed.** An image with an alpha channel ships as PNG,
+   roughly ten times the weight of a JPEG. Give a layer its background in Figma if it sits
+   on a solid colour.
+4. **Never place an image smaller than it's shown.** Images are packed at up to 2× the size
+   they're drawn at; one stretched past its own pixels can only look soft.
+5. **Flatten live blurs, and don't animate blur.** It's a common reason ads get pulled for
+   CPU load.
+6. **Name banner frames by their size** (`300x250`) so *Find every banner on this page*
+   picks them up.
 
-**1. End on your end card.** The animation has to stop to meet spec, and it freezes on
-whatever the last frame is. Figma builds seamless loops, so a loop that returns to the
-start will freeze on frame one with no call to action. Build the timeline so the end
-card is genuinely last, then check it on the Inspect tab with *Jump to end frame*.
+Motion that converts: fades and slides (checked against Figma's playback); scale,
+rotation, diagonal and custom moves (converted, flagged so you compare the preview with
+Figma); and hand-placed position, opacity, rotation and scale keyframes. Size, path-draw and per-letter text animation, and animated colour,
+blur or corner radius, can't be converted: the banner says which layer, and it stays still.
 
-**2. Only use transparency where you actually need it.** This is the single biggest
-lever on file size. An image with an alpha channel has to ship as PNG, which costs
-roughly **ten times** what the same picture costs as a JPEG. If a layer sits on a solid
-background, give it that background in Figma so it exports opaque. Save transparency for
-cutouts that genuinely need it.
+## Development
 
-**3. Crop transparent images to their content.** A cutout that is mostly empty space is
-paying full price for pixels nobody sees. Trim the frame to the artwork.
+| Path | What |
+|---|---|
+| `figma-plugin/code.js` | The plugin's Figma side: scanning, copying, restore points, export |
+| `figma-plugin/src/ui.html` | The panel: plans, building, preview, download |
+| `figma-plugin/src/converter.js` | The engine: checks, fixes and packages one banner. Limits live in its `SPEC` |
+| `figma-plugin/ui.html` | Generated: `node figma-plugin/build.mjs` inlines the converter and stamps `VERSION` |
+| `index.html`, `preview.html`, `gwd.html` | The site (GitHub Pages from `main`) |
+| `releases.json` | Versions and notes, shown on the site |
 
-**4. Never place an image smaller than it is shown at.** Every image is automatically
-resampled to the size it is actually drawn at, so an oversized source costs you nothing.
-The reverse is not true: a 400px image stretched across an 800px frame can only ever look
-soft, and the tool will say so under *Image sharpness*.
+**Releasing:** with everything committed, run
 
-**4a. Watch for many transparent cutouts on one canvas.** Six product cutouts each drawn
-at 400px need roughly 250KB as PNG and will not fit. If they sit on a common background,
-composite the whole cluster into one flattened image in Figma: one opaque JPEG is far
-sharper than six starved PNGs for the same bytes.
-
-**5. Reuse one image rather than duplicating it.** Identical images are detected and
-shipped once, so placing the same texture or logo five times costs what one costs.
-Five near-identical variants cost five times as much.
-
-**6. Flatten live blur effects, and never animate a blur amount.** Gaussian blur is
-recalculated every frame and is a common reason an ad gets pulled for CPU load on weak
-devices. Animating the blur *amount* is the worst case, because the whole effect is
-recomputed on every frame — animate opacity, position or scale instead. If blurred
-artwork never changes, flatten it into an image layer. The tool warns on an animated
-blur, on any radius past 40px, and past eight live blurs.
-
-**7. Prefer linear gradients.** Diamond and angular gradients have no SVG equivalent, so
-Figma fakes them with mirrored rectangles and a clip path. The tool repairs the two ways
-that goes wrong, but a linear gradient needs no repair at all.
-
-**8. Watch the vector artwork itself.** Shapes, paths, effects and keyframes all have
-weight before a single image is counted. A very complex illustration can blow the budget
-on its own, and no amount of image compression will save it — the tool will tell you when
-that is what is happening.
-
-**9. Keep it within 15 seconds.** That is the ceiling for the whole animation including
-repeats, so a 5-second loop can play three times and a 10-second loop can only play once.
-
-**10. Everything must be inside the file.** No linked images, no fonts loaded from the
-web, no external anything. Ticking *Outline text* covers the font half of this.
-
-## What it does automatically
-
-- Wraps the artwork in an ad shell with `ad.size` meta and a dynamic IAB `clickTag`
-  (no landing page is baked in — the ad server supplies it)
-- Caps infinite loops so total animation fits the spec window, holding the last frame
-- Realigns diamond/angular gradients, which Figma exports offset from the shape they
-  fill, slicing the artwork
-- Strips any scripts from the artwork
-- Leaves out images that never show (stacked under another image, or only shaping a mask):
-  each is checked by drawing the banner through its animation without it, and goes only
-  if nothing on screen changes
-- Sizes each embedded image independently against measured bytes until the package fits,
-  choosing JPEG or PNG from whether that image's own pixels actually use transparency
-- Makes the backup image ad servers want beside the zip: the end frame as a JPEG under
-  50 KB (**Download backup .jpg**)
-- Ships images as separate files at the package root rather than base64, avoiding a 33%
-  size penalty and any question of whether a validator walks subfolders
-
-## Inspect a built ad
-
-The second tab audits a package that already exists — drop a finished **.zip** or an
-**index.html** and it reports what is actually in it rather than rebuilding anything.
-Use it to check work that came from someone else, or that was built by an older version
-of this tool.
-
-It reads the real bytes: total weight, how many times the animation plays and for how
-long, image formats, whether assets sit in subfolders, external calls, clickTag and
-`ad.size`. It also gives you a large preview with a timeline scrubber and a **jump to
-end frame** button — the quickest way to confirm the ad finishes on your call to action
-rather than back on frame one.
-
-A loose `index.html` has no images beside it, so weight can't be judged; formats and
-paths are still checked from what the markup references.
-
-## What it refuses to guess
-
-It blocks, and tells you what to change, when the export is static, when text isn't
-outlined, when one play exceeds the time limit, when the artwork calls out to the
-internet, or when the file simply can't be made small enough. In that last case it
-names the specific image or tells you the vector artwork itself is the problem — it
-will not quietly degrade images to chase a budget they can't fix.
-
-## Changing the spec
-
-Every threshold lives in the `SPEC` object at the top of `index.html`. Nothing else in
-the file needs to change to retarget it at a different placement.
-
-```js
-const SPEC = {
-  maxZipKB: 146,           // zip under 150,000 bytes, leaving 50 KB for the backup JPG
-  maxAnimationSeconds: 15, // one play of the timeline
-  maxTotalSeconds: 15,     // all plays together
-  holdOnLastFrame: true,   // must stop, not loop forever
-  formatOpaque: "image/jpeg",
-  formatAlpha:  "image/png",
-  ...
-};
+```bash
+node scripts/release.mjs patch "What changed" "Anything else"
 ```
 
-The shipped defaults follow Google's rules for HTML5 display (Display & Video 360,
-Campaign Manager 360, Google Ad Manager): the zip and its backup JPG under 200 KB together,
-animation that stops within 15 seconds (the IAB guideline; Google rejects anything past
-30), and JPG/PNG images. Swap them for whatever a brief
-specifies.
+(`minor` or `major` instead of `patch`, or an exact `1.2.3`; `--dry-run` to try it). It
+stamps the version, builds, zips `dist/Copy-Motion.zip`, adds the notes to the site,
+commits, tags, pushes, and publishes the GitHub release the site's download button
+points at.
 
-## Browser support
-
-Needs `CompressionStream` for zip building — Chrome/Edge 80+, Safari 16.4+, Firefox 113+.
+Retargeting a different spec: change `SPEC` at the top of `figma-plugin/src/converter.js`
+and rebuild.

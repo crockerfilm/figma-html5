@@ -20,8 +20,15 @@ Runs entirely inside Figma, with network access set to none.
 
 ## Install (once)
 
-Figma desktop app → **Plugins → Development → Import plugin from manifest…** → pick
+Move this **Copy Motion** folder somewhere it can stay (e.g. Documents/Figma Plugins). Then,
+in the Figma desktop app: **Plugins → Development → Import plugin from manifest…** → pick
 `manifest.json` in this folder. It then appears under Plugins → Development → Copy Motion.
+
+## Update
+
+Download the latest from https://crockerfilm.github.io/figma-html5/ and replace the files in
+this folder with the new ones. No need to import again: Figma reads the folder each time
+the plugin runs. The panel's footer shows the version.
 
 ## Use
 
@@ -68,11 +75,11 @@ it's on, clicking around in Figma doesn't reset what you've built. Banners are g
 the frame they sit in; tick a group's heading to take or drop the whole group (a board of
 mockups, say). **Build and
 check** exports each banner from Figma, rebuilds its Motion animation as CSS, then runs the
-web tool's own checks and packaging. Click a built banner to preview it with a scrubber and
+converter's checks and packaging. Click a built banner to preview it with a scrubber and
 *End frame*. **Download** gives one zip: a zip per banner that passed, named
 `<version>_<first words of the headline>_<WxH>.zip`, with its **backup .jpg** beside it
 (same name), plus `report.csv` (file, full path, headline, size, KB, length, notes).
-Banners that don't meet spec are left out, as on the web tool.
+Banners that don't meet spec are left out.
 
 **Backup image:** each banner that passes gets one: its end frame as a JPEG under 50 KB, at
 the best quality that fits. It's shown under the preview and goes beside the zip, not in it.
@@ -101,13 +108,17 @@ frame's own drop shadow, and a frame named for a size but 1–2 px off is export
 named size — each noted on the banner. A bigger name/size gap blocks with an **Export at
 W×H instead** button, since it may be deliberate.
 
+**Edited after building?** A banner changed in Figma after it was built is marked
+*Changed in Figma — build again* and isn't downloaded as it was; the button builds just
+those again. Each banner's preview also has **Build again**.
+
 **Preview all** opens every built banner side by side in a larger window, each playing
 live: *Play all* restarts them together, one scrubber moves them all to the same moment,
 *End frames* shows each one's last frame. Filter to Ready or Not to spec; 12 per page.
 Click a banner for its full preview and spec checks.
 
 **Plays** (once, 2, 3 or **Loops forever**) and **Pause between plays** sit above the list
-and are the same option as on the web tool: the end frame holds for the pause, then the
+set how it plays: the end frame holds for the pause, then the
 animation replays, and the last play ends on the end frame. Animation must stop within 15 s
 (the IAB guideline; Google rejects anything past 30 s), so **Loops forever** is blocked and
 the default is 2 plays with an 8 s pause and a 1 s fade (exactly 15 s for a 3 s timeline). To restart cleanly, tick **Fade animated layers
@@ -136,7 +147,7 @@ and one opacity animation, one play holding the last frame. Bezier curves are ex
 springs are sampled. Size, path-draw and per-letter text presets can't be converted and are
 reported as such.
 
-The checks come from `../index.html` (between `@converter:start` and `@converter:end`).
+The checks come from `src/converter.js`, the plugin's engine (limits in its `SPEC`).
 `ui.html` is generated — edit `src/ui.html`, then run `node figma-plugin/build.mjs`.
 
 ## Safety net
@@ -152,6 +163,12 @@ The checks come from `../index.html` (between `@converter:start` and `@converter
 - Runs over 150 layers take a second click that states the count.
 - **Stop** halts a run part-way; its restore point covers what it already did.
 - The plugin only ever changes animation. It never deletes, moves or edits layers.
+- It only works on the page that's open. Switching page stops a run, and its restore point
+  stays with the page it changed.
+- Locked layers, and layers that are part of a main component (changing one would change
+  every instance in the file), are left alone and listed as skipped.
+- A layer whose current animation the plugin couldn't put back (a built-in preset Figma
+  won't let plugins re-apply) isn't changed, so going back is always possible.
 
 **Remove other animation…** (removes animation from everything except your selection) opens a review first: every animated layer in your
 selection that will be **kept** (with its animation and a Show link), and what will be

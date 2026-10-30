@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Banner Preview</title>
+<title>Check a delivery</title>
 <style>
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --line: #dfe3e8; --text: #16191d; --muted: #646b75;
@@ -60,14 +60,26 @@
   .click.ok { color: var(--ok); }
   .err { color: var(--bad); }
   .legend { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  /* The bar shared by every page of the site. */
+  .site { border-bottom: 1px solid var(--line); background: var(--panel); }
+  .site .in { max-width: 1400px; margin: 0 auto; padding: 0 16px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-height: 48px; }
+  .site b { margin-right: 14px; font-size: 14px; }
+  .site a { color: var(--muted); text-decoration: none; padding: 5px 10px; border-radius: 6px; font-size: 13px; }
+  .site a:hover, .site a.on { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
 </style>
 </head>
 <body>
+<nav class="site"><div class="in">
+  <b>Copy Motion</b>
+  <a href="./">Plugin</a>
+  <a class="on" href="preview.html">Check a delivery</a>
+  <a href="gwd.html">GWD clickTag</a>
+</div></nav>
 <main>
-  <h1>Banner Preview</h1>
-  <p class="sub">Drop a delivery zip, banner zips or a folder to see every banner playing beside its backup image. Everything stays on your computer.</p>
-  <div id="drop"><b>Drop zips or a folder here</b><span>or click to choose files. A delivery zip of folders, a zip of zips, or single banner zips all work.</span></div>
-  <input type="file" id="file" multiple accept=".zip,.jpg,.jpeg,.png" class="hidden">
+  <h1>Check a delivery</h1>
+  <p class="sub">Drop a delivery zip, banner zips or a folder: every banner plays beside its backup image, with its weight, length, click and package checked. Works for Figma and Google Web Designer banners. Everything stays on your computer.</p>
+  <div id="drop"><b>Drop zips or a folder here</b><span>or click to choose files. A delivery zip of folders, a zip of zips, banner zips, or unzipped banner folders all work.</span></div>
+  <input type="file" id="file" multiple accept=".zip,.jpg,.jpeg,.png,.gif" class="hidden">
 
   <div class="bar hidden" id="bar">
     <button class="primary" id="play">Play all</button>
@@ -79,7 +91,7 @@
     <button id="clear">Clear</button>
   </div>
   <div class="summary hidden" id="summary"></div>
-  <div class="legend hidden" id="legend">Limits checked: zip under 200 KB (150 KB leaves room for the backup), backup JPG under 50 KB, zip and backup together under 200 KB. KB as Finder counts them (1 KB = 1000 bytes).</div>
+  <div class="legend hidden" id="legend">Limits checked (Google's display rules): zip under 200 KB (150 KB leaves room for the backup), backup JPG under 50 KB at the banner's size, zip and backup together under 200 KB, animation stopping within 30 s. Also checked: an ad.size tag, a clickTag, nothing loaded from the internet, and file types ad servers accept. KB as Finder counts them (1 KB = 1000 bytes).</div>
   <div id="groups"></div>
 </main>
 
@@ -87,15 +99,21 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const TEST_URL = "https://www.example.com/?qa=banner-preview";
-const LIMITS = { zip: 200000, roomy: 150000, backup: 50000, pair: 200000 };
-const kb = n => `${(n / 1000).toFixed(n < 10000 ? 1 : 0)} KB`;
+const LIMITS = { zip: 200000, roomy: 150000, backup: 50000, pair: 200000, seconds: 30 };
+const kb = n => `${(n / 1000).toFixed(1)} KB`;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const MIME = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", svg: "image/svg+xml", webp: "image/webp",
-               css: "text/css", js: "text/javascript", json: "application/json", html: "text/html", woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf" };
-const mimeOf = n => MIME[(n.split(".").pop() || "").toLowerCase()] || "application/octet-stream";
+               css: "text/css", js: "text/javascript", json: "application/json", html: "text/html", htm: "text/html",
+               woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf", eot: "application/vnd.ms-fontobject" };
+const extOf = n => (n.split(".").pop() || "").toLowerCase();
+const mimeOf = n => MIME[extOf(n)] || "application/octet-stream";
 const baseName = p => p.split("/").pop();
 const dirName = p => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
 const stemOf = p => baseName(p).replace(/\.[^.]+$/, "");
+const noZip = p => p.replace(/\.zip$/i, "");
+const IMAGE = /\.(jpe?g|png|gif|webp)$/i;
+// File types Google's ad servers take in an HTML5 zip.
+const ACCEPTED = new Set(["html", "htm", "css", "js", "json", "jpg", "jpeg", "png", "gif", "svg", "woff", "woff2", "ttf", "otf", "eot", "txt"]);
 
 /* ---------------------------------------------------------------- zip --- */
 // Read through the central directory, so zips made by Finder (which put sizes
@@ -128,35 +146,59 @@ async function readZip(u8) {
 
 /* ------------------------------------------------------------- reading --- */
 let banners = [], images = [], nextId = 0;
-// A zip holding an HTML page is a banner; otherwise it's a container, opened
-// in turn (its zips are banners or containers, its images are backups).
+const keepImage = (path, data) => { images = images.filter(i => i.path !== path); images.push({ path, data }); };
+
+// The banners in a set of files: each folder holding an index.html (or, when
+// there's none, the one folder holding an HTML page), not counting a page
+// inside another banner's folder.
+function bannerRoots(files) {
+  let roots = [...new Set(files.filter(f => /(^|\/)index\.html?$/i.test(f.name)).map(f => dirName(f.name)))];
+  if (!roots.length) roots = [...new Set(files.filter(f => /\.html?$/i.test(f.name)).map(f => dirName(f.name)))].slice(0, 1);
+  return roots.filter(r => !roots.some(o => o !== r && (o === "" || r.startsWith(o + "/"))));
+}
+function bannerFrom(files, root, extra) {
+  const own = files.filter(f => !root || f.name.startsWith(root + "/")).map(f => ({ name: root ? f.name.slice(root.length + 1) : f.name, data: f.data }));
+  const page = own.find(f => /^index\.html?$/i.test(f.name)) || own.find(f => /\.html?$/i.test(f.name) && !f.name.includes("/")) || own.find(f => /\.html?$/i.test(f.name));
+  return Object.assign({ id: nextId++, files: own, page: page.name }, extra);
+}
+
+// A zip holding one banner's page is a banner. A zip of unzipped banner
+// folders gives one banner per folder. Anything else is a container, opened in
+// turn: its zips are banners or containers, its images are backups.
 async function addZip(path, u8, depth = 0) {
   // Dropped again: the newer copy replaces the old one, not a second card.
-  banners = banners.filter(b => b.path !== path);
+  banners = banners.filter(b => b.path !== path && !b.path.startsWith(noZip(path) + "/"));
   let files;
   try { files = await readZip(u8); } catch (e) { banners.push({ id: nextId++, path, error: `couldn't read it (${e.message})`, size: u8.length }); return; }
-  const html = files.filter(f => /\.html?$/i.test(f.name));
-  if (html.length) {
-    // The page at the root, or inside the one folder everything sits in.
-    const page = html.find(f => /^index\.html?$/i.test(f.name)) || html.find(f => /(^|\/)index\.html?$/i.test(f.name)) || html[0];
-    const root = dirName(page.name);
-    const own = files.filter(f => !root || f.name.startsWith(root + "/")).map(f => ({ name: root ? f.name.slice(root.length + 1) : f.name, data: f.data }));
-    banners.push({ id: nextId++, path, size: u8.length, files: own, page: page.name.slice(root ? root.length + 1 : 0), nested: !!root });
+  const roots = bannerRoots(files);
+  if (roots.length === 1) { banners.push(bannerFrom(files, roots[0], { path, size: u8.length, nested: !!roots[0] })); return; }
+  const base = noZip(path);
+  if (roots.length > 1) {
+    for (const r of roots) banners.push(bannerFrom(files, r, { path: `${base}/${r}`, size: sum(files, r), unzipped: true }));
+    for (const f of files) if (IMAGE.test(f.name) && !roots.some(r => f.name.startsWith(r + "/"))) keepImage(`${base}/${f.name}`, f.data);
     return;
   }
   if (depth > 3) return;
-  const base = dirName(path);
   for (const f of files) {
-    const full = [base, f.name].filter(Boolean).join("/");
+    const full = `${base}/${f.name}`;
     if (/\.zip$/i.test(f.name)) await addZip(full, f.data, depth + 1);
-    else if (/\.(jpe?g|png|gif|webp)$/i.test(f.name)) { images = images.filter(i => i.path !== full); images.push({ path: full, data: f.data }); }
+    else if (IMAGE.test(f.name)) keepImage(full, f.data);
   }
 }
+const sum = (files, root) => files.filter(f => !root || f.name.startsWith(root + "/")).reduce((n, f) => n + f.data.length, 0);
+
 async function addFiles(list) {
+  const loose = [];
   for (const { path, file } of list) {
     const u8 = new Uint8Array(await file.arrayBuffer());
     if (/\.zip$/i.test(path)) await addZip(path, u8);
-    else if (/\.(jpe?g|png|gif|webp)$/i.test(path)) { images = images.filter(i => i.path !== path); images.push({ path, data: u8 }); }
+    else if (IMAGE.test(path) && !list.some(x => /\.html?$/i.test(x.path) && path.startsWith(dirName(x.path) + "/"))) keepImage(path, u8);
+    else loose.push({ name: path, data: u8 });
+  }
+  // Unzipped banner folders dropped as they are.
+  for (const r of bannerRoots(loose)) {
+    banners = banners.filter(b => b.path !== (r || "(dropped files)"));
+    banners.push(bannerFrom(loose, r, { path: r || "(dropped files)", size: sum(loose, r), unzipped: true }));
   }
   render();
 }
@@ -176,45 +218,110 @@ async function readDrop(dt) {
   return out;
 }
 
+// A banner's backup: the image beside it with its name; else the only image
+// anywhere with its name; else — for backups kept in their own folder and named
+// a little differently ("AD_1B_300x250.jpg" for "AD24_1B_300x250.zip") — the
+// only one ending in the same version code and size.
+function findBackup(b) {
+  const key = p => (dirName(p) + "/" + stemOf(p)).toLowerCase();
+  const exact = images.find(i => key(i.path) === key(b.path));
+  if (exact) return { img: exact, near: false };
+  const same = images.filter(i => stemOf(i.path).toLowerCase() === stemOf(b.path).toLowerCase());
+  if (same.length === 1) return { img: same[0], near: true };
+  const tail = p => stemOf(p).toLowerCase().split(/[_\s-]+/).slice(-2).join("_");
+  if (!/_\d+x\d+$/.test(tail(b.path))) return null;
+  const near = images.filter(i => tail(i.path) === tail(b.path));
+  return near.length === 1 ? { img: near[0], near: true } : null;
+}
+
+/* -------------------------------------------------------------- checks --- */
+// What can be read from the files themselves: size, ad.size tag, clickTag,
+// anything fetched from the internet, file types, and GWD timeline loops.
+function inspectBanner(b) {
+  const dec = new TextDecoder();
+  const text = b.files.filter(f => /\.(html?|css|js|json)$/i.test(f.name)).map(f => dec.decode(f.data)).join("\n");
+  const page = dec.decode(b.files.find(f => f.name === b.page).data);
+  const meta = /<meta[^>]+name\s*=\s*["']ad\.size["'][^>]*>/i.exec(page);
+  const mw = meta && /width\s*=\s*(\d+)/i.exec(meta[0]), mh = meta && /height\s*=\s*(\d+)/i.exec(meta[0]);
+  const gw = /data-gwd-width="(\d+)px"[^>]*data-gwd-height="(\d+)px"/.exec(page), named = /(\d{2,4})\s*[x×X]\s*(\d{2,4})/.exec(baseName(b.path));
+  b.dims = mw && mh ? { w: +mw[1], h: +mh[1] } : gw ? { w: +gw[1], h: +gw[2] } : named ? { w: +named[1], h: +named[2] } : { w: 300, h: 250, guessed: true };
+  b.hasAdSize = !!(mw && mh);
+  b.hasClickTag = /clickTag/.test(text);
+  // Only what the browser would fetch: src on any tag, a stylesheet link,
+  // CSS url() and @import. (A URL in a comment or a link's href isn't a load.)
+  const hosts = new Set(), css = b.files.filter(f => /\.css$/i.test(f.name)).map(f => dec.decode(f.data)).join("\n") + page;
+  const add = u => { const m = /^(?:https?:)?\/\/([^/"'\s)<>?#]+)/i.exec(u.trim()); if (m && !/(^|\.)w3\.org$/i.test(m[1])) hosts.add(m[1].toLowerCase()); };
+  for (const m of page.matchAll(/<(?!a\b)[a-z][\w-]*\b[^>]*?\s(?:src|srcset|data-src)\s*=\s*["']([^"']+)["']/gi)) add(m[1]);
+  for (const m of page.matchAll(/<link\b[^>]*?\shref\s*=\s*["']([^"']+)["']/gi)) add(m[1]);
+  for (const m of css.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)|@import\s+["']([^"']+)["']/gi)) add(m[1] || m[2]);
+  // A landing page written into the clickTag isn't a fetch, but it is hardcoded.
+  b.hardcoded = (/clickTag\s*=\s*["'](https?:[^"']+)["']/.exec(text) || [])[1] || "";
+  b.hosts = [...hosts].filter(h => !(b.hardcoded && b.hardcoded.toLowerCase().includes(h)));
+  b.oddFiles = b.files.map(f => f.name).filter(n => !ACCEPTED.has(extOf(n)));
+  b.gwd = gwdLoops(text);
+}
+// GWD timeline events that jump back: plain gotoAndPlay loops forever,
+// gotoAndPlayNTimes repeats. Minified or not, either quote style.
+function gwdLoops(h) {
+  const Q = `["']`, S = `${Q}[^"']*${Q}`;
+  let forever = false, repeats = false;
+  for (const m of h.matchAll(new RegExp(`addHandler\\(\\s*${S}\\s*,\\s*${Q}event-\\d+${Q}\\s*,\\s*gwd\\.(\\w+)`, "g"))) {
+    const at = new RegExp(`gwd\\.${m[1]}\\s*=\\s*function\\s*\\([^)]*\\)\\s*\\{([\\s\\S]{0,4000}?)\\}`).exec(h);
+    const body = at ? at[1] : "";
+    if (/gotoAndPlayNTimes\s*\(/.test(body)) repeats = true;
+    else if (/gotoAndPlay\s*\(/.test(body)) forever = true;
+  }
+  return { forever, repeats };
+}
+
 /* ------------------------------------------------------------- preview --- */
 const b64 = u8 => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Path from a file in folder `from` to `to` (both inside the banner).
+function rel(from, to) {
+  const a = from ? from.split("/") : [], b = to.split("/");
+  while (a.length && b.length > 1 && a[0] === b[0]) { a.shift(); b.shift(); }
+  return "../".repeat(a.length) + b.join("/");
+}
+// Every way a file in `from` might name `to`: as written, with ./, URL-encoded
+// or HTML-escaped. One pass, longest first, whole references only.
+function inline(text, from, others, uriOf) {
+  const map = new Map();
+  for (const g of others) {
+    const r = rel(from, g.name);
+    for (const v of [r, "./" + r, encodeURI(r), r.replace(/&/g, "&amp;"), "./" + encodeURI(r)]) if (!map.has(v)) map.set(v, g);
+  }
+  if (!map.size) return text;
+  const re = new RegExp(`(?<![\\w.\\/-])(${[...map.keys()].sort((x, y) => y.length - x.length).map(reEsc).join("|")})(?![\\w.-])`, "g");
+  return text.replace(re, v => uriOf(map.get(v)));
+}
 // The page with every file it uses inlined (a preview frame has no folder to
 // load them from), plus a small driver: seek, play, end frame, and — when
 // testing clicks — a landing page set the way an ad server sets it, with
 // window.open reporting what it would open instead of opening it.
 function previewDoc(b, testClicks) {
   const dec = new TextDecoder();
-  let html = dec.decode(b.files.find(f => f.name === b.page).data);
-  const others = b.files.filter(f => f.name !== b.page).sort((x, y) => y.name.length - x.name.length);
+  const others = b.files.filter(f => f.name !== b.page);
+  const plain = new Map(others.map(g => [g, `data:${mimeOf(g.name)};base64,${b64(g.data)}`]));
   const uri = new Map();
   for (const f of others) {
-    let data = f.data;
-    if (/\.css$/i.test(f.name)) {   // a stylesheet's own images, before it becomes a data URI
-      let css = dec.decode(data);
-      for (const g of others) if (g !== f) css = css.split(g.name).join(`data:${mimeOf(g.name)};base64,${b64(g.data)}`);
-      data = new TextEncoder().encode(css);
-    }
-    uri.set(f.name, `data:${mimeOf(f.name)};base64,${b64(data)}`);
+    // A stylesheet's own images and fonts, relative to its folder, before it becomes a data URI.
+    uri.set(f, /\.css$/i.test(f.name)
+      ? `data:text/css;base64,${b64(new TextEncoder().encode(inline(dec.decode(f.data), dirName(f.name), others.filter(g => g !== f), g => plain.get(g))))}`
+      : plain.get(f));
   }
-  for (const f of others) html = html.split(f.name).join(uri.get(f.name));
+  const html = inline(dec.decode(b.files.find(f => f.name === b.page).data), dirName(b.page), others, g => uri.get(g));
   const driver = `<script>(function(){var ID=${b.id};
 ${testClicks ? `try{window.clickTag=${JSON.stringify(TEST_URL)};}catch(e){}` : ""}
-window.open=function(u,t){parent.postMessage({bp:"open",id:ID,u:String(u),t:String(t)},"*");return null;};
+window.open=function(u,t){parent.postMessage({bp:"open",id:ID,u:String(u),t:t===undefined||t===""?"_blank":String(t)},"*");return null;};
 function A(){return document.getAnimations?document.getAnimations():[];}
 addEventListener("message",function(e){var d=e.data||{};
  if(d.cmd==="seek")A().forEach(function(x){x.pause();x.currentTime=d.t;});
  else if(d.cmd==="play")A().forEach(function(x){x.currentTime=0;x.play();});
  else if(d.cmd==="end")A().forEach(function(x){var c=x.effect.getComputedTiming();x.pause();x.currentTime=isFinite(c.endTime)?c.endTime:Math.max(0,(c.duration||0)-1);});});
-addEventListener("load",function(){setTimeout(function(){var m=0,inf=false;A().forEach(function(x){var c=x.effect.getComputedTiming();if(!isFinite(c.endTime))inf=true;else m=Math.max(m,c.endTime);});parent.postMessage({bp:"len",id:ID,ms:m,inf:inf},"*");},400);});
+addEventListener("load",function(){setTimeout(function(){var m=0,inf=false,n=0;A().forEach(function(x){n++;var c=x.effect.getComputedTiming();if(!isFinite(c.endTime))inf=true;else m=Math.max(m,c.endTime);});parent.postMessage({bp:"len",id:ID,ms:m,inf:inf,n:n},"*");},400);});
 })();<\/script>`;
   return /<\/body>/i.test(html) ? html.replace(/<\/body>(?![\s\S]*<\/body>)/i, driver + "</body>") : html + driver;
-}
-function sizeOf(b) {
-  const page = b.files && b.files.find(f => f.name === b.page);
-  if (!page) return null;
-  const h = new TextDecoder().decode(page.data);
-  const m = /ad\.size"\s+content="width=(\d+),\s*height=(\d+)/i.exec(h) || /data-gwd-width="(\d+)px"[^>]*data-gwd-height="(\d+)px"/.exec(h) || /(\d{2,4})\s*[x×X]\s*(\d{2,4})/.exec(baseName(b.path));
-  return m ? { w: +m[1], h: +m[2], html: h } : { w: 300, h: 250, html: h };
 }
 
 let frames = [], longest = 0;
@@ -232,6 +339,37 @@ function loadFrame(box) {
   frames.push({ id: b.id, f });
 }
 
+const pill = (cls, text, title) => `<span class="pill ${cls}"${title ? ` title="${esc(title)}"` : ""}>${esc(text)}</span>`;
+// Each banner's pills and whether it needs a look, from its files alone.
+function factsOf(b) {
+  const f = [];
+  let issue = false;
+  const bad = (t, title) => { f.push(pill("bad", t, title)); issue = true; };
+  const warn = (t, title) => { f.push(pill("warn", t, title)); issue = true; };
+  if (b.unzipped) warn(`not zipped · ${kb(b.size)} of files`, "Zip the banner's folder to check its real weight.");
+  else if (b.size > LIMITS.zip) bad(`zip ${kb(b.size)} — over 200`);
+  else f.push(pill(b.size > LIMITS.roomy ? "warn" : "ok", `zip ${kb(b.size)}`, b.size > LIMITS.roomy ? "Over 150 KB: the zip and a 50 KB backup can pass 200 KB together." : ""));
+  if (b.backup) {
+    const bk = b.backup.img.data.length, jpg = /\.jpe?g$/i.test(b.backup.img.path);
+    if (!jpg) warn(`backup is ${extOf(b.backup.img.path).toUpperCase()}, not JPG`);
+    else if (bk > LIMITS.backup) bad(`backup ${kb(bk)} — over 50`);
+    else f.push(pill("ok", `backup ${kb(bk)}`, b.backup.near ? `Paired by name: ${b.backup.img.path}` : b.backup.img.path));
+    if (b.backup.near) f.push(pill("", "backup in another folder", b.backup.img.path));
+    const pair = b.size + bk;
+    if (!b.unzipped) { if (pair > LIMITS.pair) warn(`together ${kb(pair)}`); else f.push(pill("ok", `together ${kb(pair)}`)); }
+    f.push(`<span class="pill hidden" data-bdim="${b.id}"></span>`);
+  } else bad("no backup");
+  f.push(`<span class="pill${b.gwd.forever ? " warn" : ""}" data-len="${b.id}"${b.gwd.forever ? ` title="Google's DV360 and Ad Manager can reject ads that animate longer than ${LIMITS.seconds} s."` : ""}>${b.gwd.forever ? "loops forever (GWD)" : "length …"}</span>`);
+  if (!b.hasAdSize) warn("no ad.size tag", "Ad servers read the banner's size from <meta name=\"ad.size\" content=\"width=…,height=…\">.");
+  if (!b.hasClickTag) bad("no clickTag", "Nothing in the banner reads a clickTag, so the ad server can't set where a click goes.");
+  if (b.hardcoded) bad("hardcoded landing page", b.hardcoded);
+  if (b.hosts.length) bad(`loads from ${b.hosts[0]}${b.hosts.length > 1 ? ` +${b.hosts.length - 1}` : ""}`, `Everything must be inside the zip: ${b.hosts.join(", ")}`);
+  if (b.oddFiles.length) warn(`${b.oddFiles.length} file type${b.oddFiles.length === 1 ? "" : "s"} ad servers may refuse`, b.oddFiles.join(", "));
+  if (b.nested) f.push(pill("warn", "page is in a subfolder", "Ad servers expect index.html at the top of the zip."));
+  if (b.dims.guessed) warn("size unknown", "No ad.size tag or size in the name; shown at 300×250.");
+  return { facts: f, issue };
+}
+
 function render() {
   frames = []; longest = 0;
   $("groups").innerHTML = "";
@@ -239,25 +377,30 @@ function render() {
   const have = banners.length > 0;
   for (const id of ["bar", "summary", "legend"]) $(id).classList.toggle("hidden", !have);
   if (!have) return;
-  // Each banner's backup: the image beside it with the same name (case aside).
-  const byKey = new Map(images.map(i => [(dirName(i.path) + "/" + stemOf(i.path)).toLowerCase(), i]));
-  for (const b of banners) {
-    const key = (dirName(b.path) + "/" + stemOf(b.path)).toLowerCase();
-    b.backup = byKey.get(key) || null;
-    if (b.files) { const s = sizeOf(b); b.dims = { w: s.w, h: s.h }; b.loopsInScript = /gotoAndPlay\(/.test(s.html) && !/gotoAndPlayNTimes\(/.test(s.html); }
-  }
+  for (const b of banners) if (b.files) { b.backup = findBackup(b); if (!b.inspected) { inspectBanner(b); b.inspected = true; } }
+  // Folders by their full path, named by their last part (or two, where those clash).
   const byFolder = new Map();
-  for (const b of banners) { const g = dirName(b.path).split("/").pop() || "(top level)"; if (!byFolder.has(g)) byFolder.set(g, []); byFolder.get(g).push(b); }
+  for (const b of banners) { const g = dirName(b.path) || "(top level)"; if (!byFolder.has(g)) byFolder.set(g, []); byFolder.get(g).push(b); }
+  const lastOf = g => g.split("/").pop();
+  const labelOf = g => [...byFolder.keys()].filter(k => lastOf(k) === lastOf(g)).length > 1 ? g.split("/").slice(-2).join(" / ") : lastOf(g);
   const groups = new Map([...byFolder].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })));
   const sel = $("folder"), keep = sel.value;
-  sel.innerHTML = `<option value="">All folders (${banners.length})</option>` + [...groups].map(([g, l]) => `<option value="${esc(g)}">${esc(g)} (${l.length})</option>`).join("");
+  sel.innerHTML = `<option value="">All folders (${banners.length})</option>` + [...groups].map(([g, l]) => `<option value="${esc(g)}">${esc(labelOf(g))} (${l.length})</option>`).join("");
   if ([...groups.keys()].includes(keep)) sel.value = keep;
+  // The summary covers every banner, whichever folder is shown.
   let issues = 0, noBackup = 0, heavyPairs = 0;
+  for (const b of banners) {
+    if (b.error) { issues++; continue; }
+    if (factsOf(b).issue) issues++;
+    if (!b.backup) noBackup++;
+    else if (!b.unzipped && b.size + b.backup.img.data.length > LIMITS.pair) heavyPairs++;
+  }
   for (const [g, list] of groups) {
     if (sel.value && sel.value !== g) continue;
     list.sort((a, b) => (a.dims ? a.dims.w * a.dims.h : 0) - (b.dims ? b.dims.w * b.dims.h : 0));
     const h = document.createElement("h2");
-    h.innerHTML = `${esc(g)} <span>${list.length} banner${list.length === 1 ? "" : "s"}</span>`;
+    h.innerHTML = `${esc(labelOf(g))} <span>${list.length} banner${list.length === 1 ? "" : "s"}</span>`;
+    h.title = g;
     $("groups").appendChild(h);
     const grid = document.createElement("div");
     grid.className = "grid";
@@ -265,34 +408,30 @@ function render() {
     for (const b of list) {
       const card = document.createElement("div");
       card.className = "card";
-      if (b.error) { card.innerHTML = `<div class="name">${esc(baseName(b.path))}</div><div class="err">This zip ${esc(b.error)}.</div>`; grid.appendChild(card); issues++; continue; }
+      if (b.error) { card.innerHTML = `<div class="name">${esc(baseName(b.path))}</div><div class="err">This zip ${esc(b.error)}.</div>`; grid.appendChild(card); continue; }
       const scale = Math.min(1, 300 / b.dims.w, 300 / b.dims.h);
       const W = Math.round(b.dims.w * scale), H = Math.round(b.dims.h * scale);
-      const pair = b.size + (b.backup ? b.backup.data.length : 0);
-      const facts = [];
-      facts.push(b.size > LIMITS.zip ? `<span class="pill bad">zip ${kb(b.size)} — over 200</span>` : b.size > LIMITS.roomy ? `<span class="pill warn">zip ${kb(b.size)}</span>` : `<span class="pill ok">zip ${kb(b.size)}</span>`);
-      if (b.backup) {
-        const bk = b.backup.data.length, jpg = /\.jpe?g$/i.test(b.backup.path);
-        facts.push(!jpg ? `<span class="pill warn">backup is ${esc(b.backup.path.split(".").pop().toUpperCase())}, not JPG</span>` : bk > LIMITS.backup ? `<span class="pill bad">backup ${kb(bk)} — over 50</span>` : `<span class="pill ok">backup ${kb(bk)}</span>`);
-        facts.push(pair > LIMITS.pair ? `<span class="pill warn">together ${kb(pair)}</span>` : `<span class="pill ok">together ${kb(pair)}</span>`);
-        if (pair > LIMITS.pair) heavyPairs++;
-      } else { facts.push(`<span class="pill bad">no backup</span>`); noBackup++; }
-      facts.push(`<span class="pill" data-len="${b.id}">${b.loopsInScript ? "loops forever (GWD)" : "length …"}</span>`);
-      if (b.nested) facts.push(`<span class="pill warn">page is in a subfolder</span>`);
-      if (b.size > LIMITS.zip || !b.backup || b.backup.data.length > LIMITS.backup || !/\.jpe?g$/i.test(b.backup.path)) issues++;
       card.innerHTML = `
         <div class="pair">
           <div class="shot"><small>HTML5 · ${b.dims.w}×${b.dims.h}</small><div class="frame" style="width:${W}px;height:${H}px" data-id="${b.id}" data-scale="${scale}"><div class="none">Loading…</div></div></div>
-          <div class="shot"><small>Backup</small><div class="frame" style="width:${W}px;height:${H}px">${b.backup ? "" : '<div class="none">No backup image with the same name</div>'}</div></div>
+          <div class="shot"><small>Backup</small><div class="frame" style="width:${W}px;height:${H}px">${b.backup ? "" : '<div class="none">No backup image with this name</div>'}</div></div>
         </div>
         <div class="name">${esc(baseName(b.path))}</div>
-        <div class="facts">${facts.join("")}</div>
+        <div class="facts">${factsOf(b).facts.join("")}</div>
         <div class="click" data-click="${b.id}">${$("testClicks").checked ? "Click the banner to test its link." : "Clicks open nothing: the clickTag is empty until an ad server sets it."}</div>`;
       if (b.backup) {
         const img = document.createElement("img");
-        img.src = URL.createObjectURL(new Blob([b.backup.data], { type: mimeOf(b.backup.path) }));
-        img.onload = img.onerror = () => URL.revokeObjectURL(img.src);   // redrawn on every toggle
-        img.title = `${baseName(b.backup.path)}`;
+        img.src = URL.createObjectURL(new Blob([b.backup.img.data], { type: mimeOf(b.backup.img.path) }));
+        img.title = b.backup.img.path;
+        // The backup must be the banner's own size (a 2× export isn't).
+        img.onload = () => {
+          URL.revokeObjectURL(img.src);
+          const p = card.querySelector(`[data-bdim="${b.id}"]`);
+          if (p && (img.naturalWidth !== b.dims.w || img.naturalHeight !== b.dims.h)) {
+            p.textContent = `backup is ${img.naturalWidth}×${img.naturalHeight}`; p.className = "pill bad";
+          }
+        };
+        img.onerror = () => URL.revokeObjectURL(img.src);
         card.querySelectorAll(".frame")[1].appendChild(img);
       }
       grid.appendChild(card);
@@ -311,9 +450,12 @@ addEventListener("message", e => {
     const el = document.querySelector(`[data-len="${d.id}"]`);
     const b = banners.find(x => x.id === d.id);
     if (!el || !b) return;
-    if (b.loopsInScript) { longest = Math.max(longest, d.ms); return; }
+    longest = Math.max(longest, d.ms);
+    if (b.gwd.forever) return;   // already says so
     if (d.inf) { el.textContent = "loops forever"; el.className = "pill warn"; }
-    else { el.textContent = `stops at ${(d.ms / 1000).toFixed(1)}s`; el.className = d.ms > 30000 ? "pill warn" : "pill ok"; longest = Math.max(longest, d.ms); }
+    else if (!d.n) { el.textContent = "length not measured"; el.className = "pill"; el.title = "No CSS animation: it animates from script (GSAP, canvas…), so check its length by eye."; }
+    else if (b.gwd.repeats) { el.textContent = `repeats (GWD) · ${(d.ms / 1000).toFixed(1)}s a play`; el.className = "pill warn"; el.title = "Its timeline replays a set number of times; check the whole run stops within 30 s."; }
+    else { el.textContent = `stops at ${(d.ms / 1000).toFixed(1)}s`; el.className = d.ms > LIMITS.seconds * 1000 ? "pill warn" : "pill ok"; }
   }
   if (d.bp === "open") {
     const el = document.querySelector(`[data-click="${d.id}"]`);

@@ -6,6 +6,21 @@ it says so — please preserve those hedges rather than hardening them into clai
 
 ---
 
+## 0. Current layout (2026-10-30, v1.0.0)
+
+The web converter page is gone; the Figma plugin replaced it. What's where now:
+
+- **Converter (the plugin's engine):** `figma-plugin/src/converter.js` — moved verbatim
+  from `index.html`'s `@converter` block. `SPEC` lives at its top. Everything below about
+  "index.html" as the converter means this file.
+- **Site** (GitHub Pages from `main`): `index.html` is the plugin's download/install page
+  (version and notes from `releases.json`), `preview.html` is *Check a delivery* (it took
+  over the old Inspect tab's checks), `gwd.html` is the GWD clickTag tool, moved here from
+  the separate `gwd-clicktag` repo (whose page now redirects).
+- **Versions:** `VERSION` is stamped into the plugin footer by `build.mjs`;
+  `scripts/release.mjs` builds, zips and publishes a GitHub release. The site's download
+  button points at the latest release.
+
 ## 1. What this is
 
 A single self-contained web page that turns an **animated SVG exported from Figma** into a

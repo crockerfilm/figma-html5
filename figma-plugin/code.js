@@ -20,7 +20,7 @@ figma.showUI(__html__, { width: 440, height: 620, themeColors: true });
 // walking a large page far faster.
 figma.skipInvisibleInstanceChildren = true;
 
-const post = msg => figma.ui.postMessage(msg);
+const post = msg => figma.ui.postMessage(msg.type === "plan" ? Object.assign({ page: figma.currentPage.id }, msg) : msg);
 const norm = s => s.replace(/\s+/g, " ").trim();
 const clip = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
 const secs = v => `${+(v || 0).toFixed(2)}s`;
@@ -210,6 +210,27 @@ function safeName(n) { try { return n.name; } catch (e) { return "(deleted layer
 // Figma marks a node removed when it is deleted or rebuilt — e.g. the layers
 // inside an instance after that instance changes.
 function gone(n) { try { return !n || n.removed; } catch (e) { return true; } }
+// Why a run should leave a layer alone, or "" if it may change it.
+function offLimits(n, page) {
+  try {
+    let p = n;
+    for (; p && p.type !== "PAGE"; p = p.parent) {
+      if (p.locked) return "locked in Figma";
+      if (p.type === "COMPONENT" || p.type === "COMPONENT_SET") return "part of a main component — changing it would change every instance, so do it by hand";
+    }
+    if (!p || p.id !== (page || figma.currentPage).id) return "on another page";
+    if (!("animationStyles" in n)) return "can't hold animation";
+    const stuck = n.animationStyles.find(a => !resolveStyleId(a));
+    if (stuck) return `its animation (“${styleName(stuck)}”) couldn't be put back afterwards, so it was left as is`;
+    return "";
+  } catch (e) { return "couldn't be read"; }
+}
+// Whether n sits on the page that's open: a plan made just before a page switch
+// can name layers on the page that was left.
+function onThisPage(n, page) {
+  try { let p = n; while (p && p.type !== "PAGE") p = p.parent; return !!p && p.id === (page || figma.currentPage).id; }
+  catch (e) { return false; }
+}
 
 // Figma's built-in presets come through with internal names such as
 // "motion.preset_name.opacity"; show them the way a person would say them.
@@ -241,6 +262,14 @@ const insideAny = (n, ids) => { for (let p = n; p; p = p.parent) if (ids.has(p.i
 // files that climb doesn't reach the selected frame, so a selected banner's
 // own layers looked "outside" it — which once wiped the hero during "remove
 // animation from others".
+// The frames a hero sits inside: a same-size wrapper round it isn't another banner.
+function aroundOf(nodes) {
+  const ids = new Set();
+  for (const n of nodes) {
+    try { for (let p = n.parent; p && p.type !== "PAGE"; p = p.parent) ids.add(p.id); } catch (e) { /* changed mid-read */ }
+  }
+  return ids;
+}
 function within(nodes) {
   const ids = new Set();
   for (const n of nodes) {
@@ -270,16 +299,18 @@ async function walkPageFresh(seq, label) {
   const info = new Map(), list = [];
   const stack = [];
   const top = figma.currentPage.children;
-  for (let i = top.length - 1; i >= 0; i--) stack.push([top[i], null, null, true]);
+  for (let i = top.length - 1; i >= 0; i--) stack.push([top[i], null, null, true, false]);
   let k = 0;
   while (stack.length) {
-    const [n, parent, inst, shownAbove] = stack.pop();
+    const [n, parent, inst, shownAbove, mainAbove] = stack.pop();
+    let main = mainAbove;
     let shown, ch = [];
     try {
       shown = shownAbove && n.visible !== false;
+      main = mainAbove || n.type === "COMPONENT" || n.type === "COMPONENT_SET";
       if ("children" in n) ch = n.children;
     } catch (e) { continue; }   // rebuilt by Figma mid-walk: skip it
-    info.set(n.id, { parent, inst, shown });
+    info.set(n.id, { parent, inst, shown, main });
     list.push(n);
     if (++k % 500 === 0) {
       await pause(`${label} — ${plural(k, "layer")} read`);
@@ -287,13 +318,14 @@ async function walkPageFresh(seq, label) {
     }
     if (ch.length) {
       const below = inst || (n.type === "INSTANCE" ? n : null);
-      for (let i = ch.length - 1; i >= 0; i--) stack.push([ch[i], n.id, below, shown]);
+      for (let i = ch.length - 1; i >= 0; i--) stack.push([ch[i], n.id, below, shown, main]);
     }
   }
   return {
     list,
     inst: n => (info.get(n.id) || {}).inst || null,          // outermost instance around n
     shown: n => { const i = info.get(n.id); return i ? i.shown : true; },
+    main: n => !!(info.get(n.id) || {}).main,                // part of a main component
     // n's ancestors' ids, nearest first
     ancestors: function* (n) { for (let id = (info.get(n.id) || {}).parent; id; id = (info.get(id) || {}).parent) yield id; }
   };
@@ -335,7 +367,8 @@ async function animatedOutside(sel, seq) {
       if (stale(seq)) return null;
     }
     if (!hasMotion(n) || ids.has(n.id)) continue;
-    if (page.inst(n)) found.inherited++;
+    // Clearing a main component would clear every instance of it, anywhere.
+    if (page.inst(n) || page.main(n)) found.inherited++;
     else found.push(n);
   }
   return found;
@@ -572,7 +605,7 @@ async function scanLayout(seq, sel) {
   const heroes = sel.filter(n => "findAll" in n);
   if (!heroes.length)
     return post({ type: "plan", mode, error: "Select whole banners for this mode, not individual layers." });
-  const heroIds = within(heroes);
+  const heroIds = within(heroes), heroAround = aroundOf(heroes);
 
   // Frames only, found by Figma itself rather than walking every layer.
   say("Finding banner-sized frames on this page…");
@@ -603,7 +636,7 @@ async function scanLayout(seq, sel) {
 
     // Every other banner this size: not a selected hero, not part of a
     // component, not inside another candidate (inner frames can share its size).
-    const cands = frames.filter(n => sizeKey(n) === h.size && !heroIds.has(n.id) && !inInstance.has(n.id));
+    const cands = frames.filter(n => sizeKey(n) === h.size && !heroIds.has(n.id) && !heroAround.has(n.id) && !inInstance.has(n.id));
     const banners = outermost(cands).filter(b => !taken.has(b.id));
     for (const b of banners) taken.add(b.id);
 
@@ -675,7 +708,8 @@ async function scanSuite(seq, sel) {
 
   // Step 2 is planned first: its banners feed step 3.
   say(`Step 2: finding the other ${size} banners…`);
-  const sameSize = outermost(frames.filter(b => sizeKey(b) === size && !heroIds.has(b.id) && !page.inst(b)));
+  const heroAround = aroundOf([hero]);
+  const sameSize = outermost(frames.filter(b => sizeKey(b) === size && !heroIds.has(b.id) && !heroAround.has(b.id) && !page.inst(b)));
   const layoutBanners = [], bridges = [];
   for (const [bi, b] of sameSize.entries()) {
     await pause(`Step 2: matching ${size} banner ${bi + 1} of ${sameSize.length} — ${where(b)} › ${b.name}`);
@@ -930,6 +964,7 @@ const LEGACY = "copyMotion.before", LEGACY_NOTE = "copyMotion.lastRun";
 
 function snapshot(n) {
   return {
+    id: n.id,
     styles: n.animationStyles.map(a => ({ type: a.type, styleId: a.styleId, name: a.name,
       timelineOffset: a.timelineOffset || 0, duration: a.duration, props: a.props })),
     tracks: manualFields(n).map(m => ({ field: m.field, baseValue: m.binding.baseValue,
@@ -938,8 +973,8 @@ function snapshot(n) {
 }
 
 const readJSON = (raw, fallback) => { try { return raw ? JSON.parse(raw) : fallback; } catch (e) { return fallback; } };
-const readIndex = () => readJSON(figma.currentPage.getPluginData(INDEX), []);
-const writeIndex = list => figma.currentPage.setPluginData(INDEX, JSON.stringify(list));
+const readIndex = (page = figma.currentPage) => readJSON(page.getPluginData(INDEX), []);
+const writeIndex = (list, page = figma.currentPage) => page.setPluginData(INDEX, JSON.stringify(list));
 
 function findByKey(key) {
   try {
@@ -971,7 +1006,9 @@ function readBackup(n, p) {
     const b = readJSON(n.getPluginData(LEGACY), null);
     return b && b.run === p.id ? b.data : null;
   }
-  return readJSON(n.getPluginData(KEY(p.id)), null);
+  const b = readJSON(n.getPluginData(KEY(p.id)), null);
+  // Duplicating a layer copies its plugin data; the copy isn't what was backed up.
+  return b && b.id && b.id !== n.id ? null : b;
 }
 
 const nodesOf = p => (p.legacy ? findByKey(LEGACY) : findByKey(KEY(p.id))).filter(n => readBackup(n, p));
@@ -983,7 +1020,7 @@ function dropBackups(p) {
 }
 
 function newRun(label) {
-  return { id: Date.now().toString(36), label, at: Date.now(), count: 0, versionSaved: false };
+  return { id: Date.now().toString(36), label, at: Date.now(), count: 0, versionSaved: false, page: figma.currentPage };
 }
 
 // Record a layer's animation before the run touches it. Throws if it can't,
@@ -992,16 +1029,20 @@ function protect(run, n) {
   if (n.getPluginData(KEY(run.id))) return;   // this run already saved it
   n.setPluginData(KEY(run.id), JSON.stringify(snapshot(n)));
   run.count++;
+  // Listed as soon as it changes anything, so a run cut short (the plugin or
+  // Figma closed) can still be gone back from.
+  if (run.count === 1) saveRun(run);
 }
 
 function saveRun(run) {
   if (!run.count) return;
-  const list = readIndex().filter(p => p.id !== run.id);
+  const page = run.page || figma.currentPage;
+  const list = readIndex(page).filter(p => p.id !== run.id);
   list.push({ id: run.id, label: run.label, at: run.at, count: run.count, versionSaved: run.versionSaved });
   list.sort((a, b) => a.at - b.at);
   // Keep the newest; the oldest take their backups with them.
   while (list.length > MAX_POINTS) dropBackups(list.shift());
-  writeIndex(list);
+  writeIndex(list, page);
   postHistory();
 }
 
@@ -1093,6 +1134,11 @@ async function goBack(id, expected) {
       await pause(`Restoring ${i + 1} of ${items.length.toLocaleString()} — ${where(n)} › ${safeName(n)}`);
       if (stopRequested) { stopped = true; break; }
       if (gone(n)) { failed.push({ where: safeId(n), error: "layer no longer exists" }); continue; }
+      if (!onThisPage(n, run.page)) { failed.push({ where: fullWhere(n), error: "left unchanged — it's on another page" }); continue; }
+      // Checked before anything is cleared, so a layer that can't be put back
+      // fully keeps the animation it has now.
+      const stuck = data.styles.find(st => !resolveStyleId(st));
+      if (stuck) { failed.push({ id: safeId(n), where: fullWhere(n), error: `left unchanged — “${stuck.name}” is a built-in preset a plugin can't re-apply; add it back by hand` }); continue; }
       try {
         protect(run, n);
       } catch (e) {
@@ -1101,11 +1147,7 @@ async function goBack(id, expected) {
       }
       try {
         clearAnimation(n);
-        for (const st of data.styles) {
-          const resolved = resolveStyleId(st);
-          if (!resolved) throw new Error(`“${st.name}” is a built-in preset a plugin can't re-apply — add it back by hand`);
-          n.applyAnimationStyle(resolved, styleConfig(st));
-        }
+        for (const st of data.styles) n.applyAnimationStyle(resolveStyleId(st), styleConfig(st));
         for (const t of data.tracks) n.applyManualKeyframeTrack(t.field, { baseValue: t.baseValue, keyframes: t.keyframes });
         restored++;
       } catch (e) {
@@ -1142,9 +1184,10 @@ function deletePoint(id) {
 }
 
 /* -------------------------------------------------------------- stop ---- */
-let stopRequested = false;
+let stopRequested = false, runActive = false;
 function running(on, label) {
   if (on) stopRequested = false;
+  runActive = !!on;
   post({ type: "running", on, label });
 }
 
@@ -1182,6 +1225,10 @@ async function apply(targets, label) {
     for (const sid of Object.keys(targets)) {
       const src = await figma.getNodeByIdAsync(sid);
       if (!src) continue;
+      if (!onThisPage(src, run.page)) {
+        failed.push({ where: safeName(src), error: "skipped — it's on another page. Go back to that page and preview again", count: targets[sid].length });
+        continue;
+      }
       const styles = src.animationStyles.map(a => Object.assign({}, a, { resolved: resolveStyleId(a) }));
       const stuck = styles.filter(a => !a.resolved);
       if (stuck.length) {
@@ -1196,6 +1243,8 @@ async function apply(targets, label) {
         if (stopRequested) { stopped = true; break sources; }
         const t = await figma.getNodeByIdAsync(tid);
         if (gone(t)) { failed.push({ where: tid, error: "layer no longer exists" }); continue; }
+        const why = offLimits(t, run.page);
+        if (why) { failed.push({ id: t.id, where: fullWhere(t), error: `skipped — ${why}` }); continue; }
         await pause(`Copying ${done + failed.length + 1} of ${total.toLocaleString()} — ${where(t)} › ${t.name}`);
         const before = t.animationStyles.map(a => a.type === "CUSTOM" ? `${a.name} (saved style)` : styleName(a));
         try {
@@ -1304,11 +1353,11 @@ function signatureOf(list) {
 async function clearOthers(signature) {
   const sel = figma.currentPage.selection;
   if (!sel.length) return post({ type: "cleared", cleared: 0, failed: [], refused: true });
-  if (signature != null) {
-    const now = await animatedOutside(sel, null);
-    if (signatureOf(now) !== signature)
-      return reviewClear(`The animated layers changed since your review (now ${now.length}), so nothing was removed. Here's a fresh review.`);
-  }
+  const page = figma.currentPage;
+  const list = await animatedOutside(sel, null);
+  if (!list) return;
+  if (signature != null && signatureOf(list) !== signature)
+    return reviewClear(`The animated layers changed since your review (now ${list.length}), so nothing was removed. Here's a fresh review.`);
   scanSeq++;
   running(true, "Removing");
   const run = newRun("Remove animation from others");
@@ -1316,11 +1365,12 @@ async function clearOthers(signature) {
   let cleared = 0, stopped = false, vanished = 0;
   const failed = [];
   try {
-    const list = await animatedOutside(sel, null);
     for (const n of list) {
       await pause(`Removing animation ${cleared + failed.length + vanished + 1} of ${list.length.toLocaleString()} — ${where(n)} › ${safeName(n)}`);
       if (stopRequested) { stopped = true; break; }
       if (gone(n)) { vanished++; continue; }
+      const why = offLimits(n, page);
+      if (why) { failed.push({ where: fullWhere(n), error: `left alone — ${why}` }); continue; }
       try {
         protect(run, n);
       } catch (e) {
@@ -1393,7 +1443,7 @@ function versionOf(b) {
     for (let p = b.parent; p && p.type !== "PAGE" && p.type !== "DOCUMENT"; p = p.parent)
       if (!SIZE_NAME.test(String(p.name))) return { versionId: p.id, versionName: p.name };
   } catch (e) { /* the layer changed while reading */ }
-  return { versionId: "", versionName: "" };
+  return { versionId: `page:${figma.currentPage.id}`, versionName: figma.currentPage.name };
 }
 async function scanExportPage(seq) {
   const page = await walkPage(seq, "Looking for banners on this page");
@@ -1426,6 +1476,7 @@ async function scanExportPage(seq) {
                 animated: (hasMotion(b) ? 1 : 0) + safeFindAll(b, hasMotion).length }, versionOf(b)));
   }
   if (stale(seq)) return;
+  exportIds = new Set(list.map(b => b.id));
   post({ type: "plan", mode, auto: true, offSize, banners: list, leftovers: leftoverCopies(), delivery: readDelivery() });
 }
 
@@ -1444,6 +1495,7 @@ async function scanExport(seq, sel) {
                 animated: (hasMotion(b) ? 1 : 0) + safeFindAll(b, hasMotion).length }, versionOf(b)));
   }
   if (stale(seq)) return;
+  exportIds = new Set(list.map(b => b.id));
   post({ type: "plan", mode, banners: list, leftovers: leftoverCopies(), delivery: readDelivery() });
 }
 
@@ -1545,7 +1597,7 @@ async function exportBanner(id, fixSize) {
       copy.effects = copy.effects.filter(e => e.type !== "DROP_SHADOW");
       fixes.push("The frame's own drop shadow falls outside the ad, so it was left out of the export.");
     }
-    const named = /^(\d+)\s*[x×]\s*(\d+)$/.exec(String(b.name).trim());
+    const named = /^(\d+)\s*[x×X]\s*(\d+)$/.exec(String(b.name).trim());
     const frameW = Math.round(b.width), frameH = Math.round(b.height);
     if (named && (+named[1] !== frameW || +named[2] !== frameH)) {
       const nw = +named[1], nh = +named[2];
@@ -1611,7 +1663,15 @@ async function exportBanner(id, fixSize) {
         const all = JSON.parse(JSON.stringify(o.animations || {}));
         for (const k of Object.keys(all)) {
           const b2 = all[k];
-          if (!b2 || !Array.isArray(b2.tracks)) continue;
+          if (!b2 || typeof b2 !== "object") continue;
+          if (!Array.isArray(b2.tracks)) {
+            // Fills, strokes and effects are kept per item (and effects per
+            // setting). The panel can't convert them, but says they're there.
+            const own = v => !!v && typeof v === "object" && (Array.isArray(v.tracks)
+              ? v.tracks.some(t => !t.animationPreset && (t.keyframes || []).length) : Object.values(v).some(own));
+            if (own(b2)) manual[k] = { nested: true };
+            continue;
+          }
           const own = b2.tracks.filter(t => !t.animationPreset);
           if (own.length) manual[k] = Object.assign({}, b2, { tracks: own });
         }
@@ -1691,6 +1751,8 @@ figma.on("selectionchange", () => {
 });
 // Another page has its own banners and its own restore points.
 figma.on("currentpagechange", () => {
+  watchPage();
+  if (runActive) stopRequested = true;   // a run never follows you to another page
   scanSeq++;
   clearTimeout(settle);
   postHistory();
@@ -1701,7 +1763,7 @@ figma.on("currentpagechange", () => {
 function guard(job, label) {
   return (...args) => job(...args).catch(e => {
     say("");
-    running(false);
+    if (!(label === "Scanning" && runActive)) running(false);
     post({ type: "crash", text: `${label} stopped: ${(e && e.message) || e}`,
            detail: String((e && e.stack) || "").split("\n").slice(0, 4).join("\n") });
   });
@@ -1732,6 +1794,7 @@ const runSelect = guard(async ids => {
   selectQuietly(nodes);
 }, "Selecting");
 
+let exportQueue = Promise.resolve();
 figma.ui.onmessage = msg => {
   if (msg.type === "scan") runScan();
   if (msg.type === "mode") { mode = msg.mode; runScan(); }
@@ -1748,7 +1811,8 @@ figma.ui.onmessage = msg => {
   if (msg.type === "reviewGoBack") reviewGoBack(msg.id);
   if (msg.type === "goBack") runGoBack(msg.id, msg.expected);
   if (msg.type === "showPoint") runShowPoint(msg.id);
-  if (msg.type === "exportBanner") guard(exportBanner, "Exporting")(msg.id, !!msg.fixSize);
+  // One export at a time: each works on its own copy and setting.
+  if (msg.type === "exportBanner") exportQueue = exportQueue.then(() => guard(exportBanner, "Exporting")(msg.id, !!msg.fixSize));
   if (msg.type === "select") runSelect(msg.ids);
   if (msg.type === "deletePoint") deletePoint(msg.id);
   if (msg.type === "stop") stopRequested = true;
@@ -1779,6 +1843,40 @@ figma.ui.onmessage = msg => {
 };
 postHistory();
 const DELIVERY = "copyMotion.delivery";
+
+// A banner edited after it was built no longer matches its build. The panel is
+// told which listed banners changed, so it builds them again rather than
+// downloading what they were. (The export's own copy isn't inside a banner.)
+let exportIds = new Set(), watched = null, staleTimer = null;
+const MOVED = new Set(["x", "y", "relativeTransform", "parent", "pluginData"]);
+const staleIds = new Set();
+function onNodeChange(ev) {
+  if (mode !== "export" || !exportIds.size) return;
+  for (const c of ev.nodeChanges) {
+    try {
+      // A banner merely moved (its board reflowing round an export's copy, say)
+      // looks the same, so that doesn't count.
+      if (exportIds.has(c.id)) {
+        if (!(c.type === "PROPERTY_CHANGE" && (c.properties || []).every(p => MOVED.has(p)))) staleIds.add(c.id);
+        continue;
+      }
+      if (c.type === "DELETE") continue;
+      for (let n = c.node && c.node.parent; n && n.type !== "PAGE"; n = n.parent)
+        if (exportIds.has(n.id)) { staleIds.add(n.id); break; }
+    } catch (e) { /* removed mid-walk */ }
+  }
+  if (staleIds.size && !staleTimer) staleTimer = setTimeout(() => {
+    staleTimer = null;
+    post({ type: "stale", ids: [...staleIds] });
+    staleIds.clear();
+  }, 400);
+}
+function watchPage() {
+  try { if (watched) watched.off("nodechange", onNodeChange); } catch (e) { /* page gone */ }
+  watched = figma.currentPage;
+  try { watched.on("nodechange", onNodeChange); } catch (e) { watched = null; /* edits just aren't tracked */ }
+}
+watchPage();
 let delivery = null;
 // True once the file refused a save: from then on this person's copy is the
 // newer one, so the file's older setup mustn't win.

@@ -1,1 +1,13 @@
-[]
+[
+  {
+    "version": "1.0.0",
+    "date": "2026-10-30",
+    "notes": [
+      "First versioned release.",
+      "Only ever works on the page you're on; locked layers and main components are left alone.",
+      "Banners edited in Figma after building are marked to build again.",
+      "More Figma Motion settings convert correctly, and unknown ones are flagged.",
+      "Warns when a banner ends blank or back on its first frame."
+    ]
+  }
+]

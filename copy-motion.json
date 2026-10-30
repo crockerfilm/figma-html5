@@ -1,9 +1,18 @@
 {
-  "version": "1.0.1",
+  "version": "1.1.0",
   "date": "2026-10-30",
-  "summary": "Marked as in development: check every banner yourself before delivering it.",
-  "download": "https://github.com/hcrocker-sys/figma-toolkit/releases/download/v1.0.1/Copy-Motion.zip",
+  "summary": "Now part of the Figma Toolkit, and tells you when a newer version is out.",
+  "download": "https://github.com/hcrocker-sys/figma-toolkit/releases/download/v1.1.0/Copy-Motion.zip",
   "history": [
+    {
+      "version": "1.1.0",
+      "date": "2026-10-30",
+      "summary": "Now part of the Figma Toolkit, and tells you when a newer version is out.",
+      "notes": [
+        "A notice at the top of the panel when there's a newer version; its only network access is reading the toolkit's version file.",
+        "New download page: hcrocker-sys.github.io/figma-toolkit."
+      ]
+    },
     {
       "version": "1.0.1",
       "date": "2026-10-30",

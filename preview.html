@@ -51,6 +51,14 @@
   .click.ok { color: var(--ok); }
   .err { color: var(--bad); }
   .legend { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  /* How it works, and what the tags mean */
+  .how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0 0 14px; counter-reset: h; }
+  .how div { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 12px 46px; position: relative; font-size: 13.5px; color: var(--muted); counter-increment: h; }
+  .how div::before { content: counter(h); position: absolute; left: 12px; top: 12px; width: 24px; height: 24px; border-radius: 50%; background: var(--panel-2);
+    border: 1px solid var(--line); color: var(--accent2); font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+  .how b { color: var(--text); display: block; font-size: 14px; }
+  .key { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  @media (max-width: 760px) { .how { grid-template-columns: 1fr; } }
   /* The bar shared by every page of the toolkit. */
   .site { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 88%, transparent);
     backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--line); }
@@ -89,8 +97,13 @@
 <main>
   <p class="eyebrow">Browser tool</p>
   <h1>Check a delivery</h1>
-  <p class="sub">Drop a delivery zip, banner zips or a folder: every banner plays beside its backup image, with its weight, length, click and package checked. Works for Figma and Google Web Designer banners. Everything stays on your computer.</p>
+  <p class="sub">See every banner in a delivery playing beside its backup, with its weight, length, click-through and package checked. Figma or Google Web Designer banners; nothing leaves your computer.</p>
   <div class="beta" role="note"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 1.5 17 16H1L9 1.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 7v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13.2" r=".9" fill="currentColor"/></svg><div><b>Still in development.</b> This is an internal tool that's still being tested, and its checks can miss things. A clean result here doesn't mean a delivery is right: check every banner yourself, against the placement's own specs. Provided as is, with no guarantee.</div></div>
+  <div class="how" aria-label="How it works">
+    <div><b>Drop the delivery</b>The delivery zip, or banner zips with their backup images. Folders work too.</div>
+    <div><b>Watch them play</b>Each banner plays next to its backup. Play all, jump to End frames, or drag the slider.</div>
+    <div><b>Read the tags</b>Green is fine, amber needs a look, red needs fixing. Click a banner to test its click-through.</div>
+  </div>
   <div id="drop"><svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="#9fd0ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Drop zips or a folder here</b><span>or click to choose files. A delivery zip of folders, a zip of zips, banner zips, or unzipped banner folders all work.</span></div>
   <input type="file" id="file" multiple accept=".zip,.jpg,.jpeg,.png,.gif" class="hidden">
 
@@ -104,6 +117,7 @@
     <button id="clear">Clear</button>
   </div>
   <div class="summary hidden" id="summary"></div>
+  <div class="key hidden" id="key"><span class="pill ok">fine</span><span class="pill warn">take a look</span><span class="pill bad">fix before delivering</span><span>Hover a tag for details.</span></div>
   <div class="legend hidden" id="legend">Limits checked (Google's display rules): zip under 200 KB (150 KB leaves room for the backup), backup JPG under 50 KB at the banner's size, zip and backup together under 200 KB, animation stopping within 30 s. Also checked: an ad.size tag, a clickTag, nothing loaded from the internet, and file types ad servers accept. KB as Finder counts them (1 KB = 1000 bytes).</div>
   <div id="groups"></div>
 </main>
@@ -388,7 +402,8 @@ function render() {
   $("groups").innerHTML = "";
   observer.disconnect();
   const have = banners.length > 0;
-  for (const id of ["bar", "summary", "legend"]) $(id).classList.toggle("hidden", !have);
+  for (const id of ["bar", "summary", "legend", "key"]) $(id).classList.toggle("hidden", !have);
+  document.querySelector(".how").classList.toggle("hidden", have);
   if (!have) return;
   for (const b of banners) if (b.files) { b.backup = findBackup(b); if (!b.inspected) { inspectBanner(b); b.inspected = true; } }
   // Folders by their full path, named by their last part (or two, where those clash).

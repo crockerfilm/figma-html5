@@ -39,8 +39,29 @@
   .beta svg{flex:none;margin-top:2px}
   .beta b{color:#ffe2a8}
 
+  /* What do you need to do? */
+  .tasks{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:26px 0 0}
+  .task{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;
+    text-decoration:none;color:var(--text);font-size:14px;transition:border-color .15s,background .15s}
+  .task:hover{border-color:var(--accent);background:#27272b}
+  .task span{display:block;color:var(--muted);font-size:13px;margin-bottom:2px}
+  .task b{color:var(--accent2)}
+  /* Callouts and help */
+  .callout{display:flex;gap:10px;align-items:flex-start;background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+    padding:10px 12px;font-size:14px;margin:0 0 18px}
+  .callout svg{flex:none;margin-top:2px}
+  details.help{border-top:1px solid var(--line);margin-top:20px;padding-top:14px}
+  details.help summary{cursor:pointer;font-weight:700;font-size:15px;color:var(--accent2);list-style:none;display:flex;align-items:center;gap:8px}
+  details.help summary::-webkit-details-marker{display:none}
+  details.help summary::before{content:"";width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .15s}
+  details.help[open] summary::before{transform:rotate(45deg)}
+  .qa{display:grid;grid-template-columns:1fr 1fr;gap:12px 26px;margin-top:14px;font-size:14px}
+  .qa b{display:block;margin-bottom:2px}
+  .qa p{margin:0;color:var(--muted)}
+
   /* Sections */
-  section{margin:0 0 40px;scroll-margin-top:76px}
+  section{margin:0 0 40px}
+  [id]{scroll-margin-top:76px}
   .label{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 14px}
   .label h2{font-size:13px;margin:0;color:var(--accent2);text-transform:uppercase;letter-spacing:.1em}
   .label span{color:var(--muted);font-size:14px}
@@ -103,7 +124,7 @@
   .rel p{margin:4px 0 6px;font-size:14px} .rel ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--muted)}
   .small{font-size:14px;color:var(--muted);margin:14px 0 0}
 
-  [hidden]{display:none!important}
+  [hidden],.hidden{display:none!important}
   .tabs{display:inline-flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:4px;margin:0 0 14px}
   .tabs button{font:inherit;font-size:14px;font-weight:700;color:var(--muted);background:none;border:0;border-radius:999px;padding:7px 14px;cursor:pointer}
   .tabs button:hover{color:var(--text)}
@@ -113,7 +134,8 @@
   footer .in{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 
   @media (max-width:760px){
-    .two,.split{grid-template-columns:1fr}
+    .two,.split,.qa{grid-template-columns:1fr}
+    .tasks{grid-template-columns:1fr 1fr}
     .split .rule{display:none}
     h1{font-size:31px} .hero{padding:34px 0 20px} .lede{font-size:16px}
     .path{white-space:normal}
@@ -144,11 +166,17 @@
     <p class="eyebrow">For display banner teams</p>
     <h1>Figma Toolkit</h1>
     <p class="lede">Figma plugins for building banner suites, and browser checks for what you deliver.</p>
+    <nav class="tasks" aria-label="What do you need to do?">
+      <a class="task" href="#cm-h"><span>Animate a suite</span><b>Copy Motion</b></a>
+      <a class="task" href="#sr-h"><span>Make every size</span><b>Static Recompose</b></a>
+      <a class="task" href="preview.html"><span>Check what you deliver</span><b>Check a delivery</b></a>
+      <a class="task" href="gwd.html"><span>Fix GWD click-throughs</span><b>GWD clickTag</b></a>
+    </nav>
   </div>
 
   <div class="beta" role="note">
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 1.5 17 16H1L9 1.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 7v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13.2" r=".9" fill="currentColor"/></svg>
-    <div><b>Still in development.</b> These tools are being built and tested, and their output can be wrong: motion that doesn't match Figma, a banner that ends on the wrong frame, a check that misses something. <b>Check every banner yourself</b> (playback, end frame, click-through, file sizes and backup image) against the placement's own specs before you deliver anything. The automated checks help, but they don't replace your review. Provided as is.</div>
+    <div><b>Still in development: check everything yourself.</b> These tools are still being tested and can get things wrong. Before you deliver anything, look at every banner's playback, end frame, click-through, file sizes and backup image against the placement's own specs. The automated checks help; they don't replace your review. Provided as is.</div>
   </div>
 
   <section aria-labelledby="plugins-h">
@@ -201,9 +229,21 @@
     </div>
   </section>
 
+  <section class="hidden" id="videoCard" aria-labelledby="vid-h">
+    <div class="label"><h2 id="vid-h">Tutorial</h2><span>Start to finish, in Figma</span></div>
+    <a class="tool" id="videoLink" href="#" target="_blank" rel="noopener">
+      <div class="icon"><svg viewBox="0 0 26 26" aria-hidden="true"><circle cx="13" cy="13" r="10.5" fill="none" stroke="#4f8fe0" stroke-width="2"/><path d="M11 9v8l6-4z" fill="#9fd0ff"/></svg></div>
+      <div><b>Watch the walkthrough</b><span>How to animate one banner, copy it across a suite and export the delivery with Copy Motion.</span></div>
+      <span class="go" aria-hidden="true">→</span>
+    </a>
+  </section>
+
   <section aria-labelledby="setup-h">
     <div class="label"><h2 id="setup-h">Install and update</h2><span>Same steps for both plugins</span></div>
-    <div class="card split">
+    <div class="card">
+    <div class="callout"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1.5" y="2.5" width="15" height="10" rx="1.5" fill="none" stroke="#9fd0ff" stroke-width="1.6"/><path d="M6 15.5h6M9 12.5v3" stroke="#9fd0ff" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span>You need the <b>Figma desktop app</b>. Plugins installed this way don't appear in Figma in the browser.</span></div>
+    <div class="split">
       <div>
         <h3 class="sub">First install</h3>
         <ol class="steps">
@@ -223,6 +263,16 @@
           <li>Close and reopen the plugin. No need to import it again.</li>
         </ol>
       </div>
+    </div>
+    <details class="help">
+      <summary>Something not working?</summary>
+      <div class="qa">
+        <div><b>There's no Plugins → Development menu</b><p>You're in Figma in the browser. Open the file in the Figma desktop app.</p></div>
+        <div><b>I can't pick manifest.json</b><p>Unzip the download first, then pick manifest.json inside the plugin's folder, not the zip.</p></div>
+        <div><b>The update didn't change anything</b><p>Replace the files in the same folder you first imported from, then close and reopen the plugin. The version shows in the panel.</p></div>
+        <div><b>The plugin disappeared</b><p>Its folder was moved or deleted. Put it somewhere permanent and import manifest.json again from there.</p></div>
+      </div>
+    </details>
     </div>
   </section>
 
@@ -305,6 +355,10 @@
 </div></footer>
 
 <script>
+  // Tutorial video: set its link here to show the Tutorial card.
+  const VIDEO_URL = '';
+  if (VIDEO_URL) { document.getElementById('videoLink').href = VIDEO_URL; document.getElementById('videoCard').classList.remove('hidden'); }
+
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const when = d => d ? new Date(d + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
   // Each plugin publishes its version file with every release.

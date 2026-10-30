@@ -70,10 +70,14 @@
   .modes { display: flex; margin: 10px 0 2px; border: 1px solid var(--figma-color-border); border-radius: 6px; overflow: hidden; }
   .modes button { flex: 1; border-radius: 0; background: transparent; color: var(--figma-color-text-secondary); font-weight: 500; padding: 7px 8px; }
   .modes button.on { background: var(--figma-color-bg-selected); color: var(--figma-color-text); font-weight: 600; }
+  #update { margin: 8px 0 0; padding: 7px 10px; border-radius: 6px; font-size: 11px;
+    background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); }
+  #update a { color: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
 </style>
 
 <div class="wrap">
   <h1>Copy Motion</h1>
+  <div id="update" class="hidden"></div>
   <div class="modes">
     <button data-mode="content" class="on">Same content</button>
     <button data-mode="layout">Same layout</button>
@@ -93,7 +97,7 @@
   </div>
   <div class="muted" id="restoreRow" style="margin-top:6px" title="Use restore points rather than ⌘Z: a long run lands in Figma's undo history as many steps.">
     <span id="restoreText">Every run saves a restore point first.</span> <a id="browse" class="hidden" style="color:var(--figma-color-text-brand);cursor:pointer">Browse</a>
-    <span style="float:right" title="Compare with the latest at crockerfilm.github.io/figma-html5">Copy Motion v__VERSION__</span>
+    <span style="float:right" title="The latest is on hcrocker-sys.github.io/figma-toolkit">Copy Motion v__VERSION__</span>
   </div>
 </div>
 
@@ -2295,6 +2299,21 @@ onmessage = ev => {
     count();
   }
 };
+// A newer version out? The toolkit page's version file says. Only that file is
+// read (the plugin's one network address); nothing about the design is sent,
+// and offline it simply says nothing.
+const VERSION = "__VERSION__", TOOLKIT = "https://hcrocker-sys.github.io/figma-toolkit/";
+const newer = (a, b) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+fetch(TOOLKIT + "copy-motion.json", { cache: "no-store" }).then(r => r.json()).then(v => {
+  if (!v || typeof v.version !== "string" || !newer(v.version, VERSION)) return;
+  const box = document.getElementById("update");
+  box.textContent = `Copy Motion v${v.version} is out${v.summary ? `: ${v.summary}` : "."} `;
+  const a = el("a", null, "Get it");
+  a.addEventListener("click", () => parent.postMessage({ pluginMessage: { type: "openToolkit" } }, "*"));
+  box.appendChild(a);
+  box.classList.remove("hidden");
+}).catch(() => { /* offline, or the page moved: no notice */ });
+
 // The plugin can post before this panel is listening, so ask for the restore
 // state once it is.
 parent.postMessage({ pluginMessage: { type: "ready" } }, "*");

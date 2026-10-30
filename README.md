@@ -8,15 +8,17 @@ A Figma plugin that copies animation across a banner suite, then exports each ba
 an HTML5 zip with its backup image, aiming at Google's display specs (DV360, Campaign
 Manager 360, Ad Manager).
 
-**→ [Download and install](https://crockerfilm.github.io/figma-html5/)**
+Part of the **[Figma Toolkit](https://hcrocker-sys.github.io/figma-toolkit/)**, with Static Recompose.
+
+**→ [Download and install](https://hcrocker-sys.github.io/figma-toolkit/)**
 
 The site also has two tools that run in the browser, with nothing uploaded:
 
 | Page | What it's for |
 |---|---|
-| [Plugin](https://crockerfilm.github.io/figma-html5/) | Download, install and update steps, and what's new in each version |
-| [Check a delivery](https://crockerfilm.github.io/figma-html5/preview.html) | Drop a delivery (zips, folders, a zip of zips): every banner plays beside its backup, with weight, length, clickTag, ad.size, external loads and file types checked. Works for Figma and Google Web Designer banners |
-| [GWD clickTag](https://crockerfilm.github.io/figma-html5/gwd.html) | Converts Google Web Designer banners to a standard IAB clickTag with no hardcoded URLs, and checks them |
+| [Plugins](https://hcrocker-sys.github.io/figma-toolkit/) | Download, install and update steps for Copy Motion and Static Recompose, and what's new |
+| [Check a delivery](https://hcrocker-sys.github.io/figma-toolkit/preview.html) | Drop a delivery (zips, folders, a zip of zips): every banner plays beside its backup, with weight, length, clickTag, ad.size, external loads and file types checked. Works for Figma and Google Web Designer banners |
+| [GWD clickTag](https://hcrocker-sys.github.io/figma-toolkit/gwd.html) | Converts Google Web Designer banners to a standard IAB clickTag with no hardcoded URLs, and checks them |
 
 ## Install and update
 
@@ -30,7 +32,8 @@ footer shows its version. Full details are in [figma-plugin/README.md](figma-plu
 Only the page that's open, and only animation: layers are never moved, edited or deleted.
 Every change is previewed first and saves a restore point on each layer plus a Figma
 version. Locked layers and main components are left alone. Export works on a temporary
-copy, so the banners themselves aren't changed. The plugin has no network access.
+copy, so the banners themselves aren't changed. Its only network access is reading
+`copy-motion.json` from the toolkit page, to say when a newer version is out.
 
 ## Designing banners for it
 
@@ -63,7 +66,7 @@ blur or corner radius, can't be converted: the banner says which layer, and it s
 | `figma-plugin/src/converter.js` | The engine: checks, fixes and packages one banner. Limits live in its `SPEC` |
 | `figma-plugin/ui.html` | Generated: `node figma-plugin/build.mjs` inlines the converter and stamps `VERSION` |
 | `index.html`, `preview.html`, `gwd.html` | The site (GitHub Pages from `main`) |
-| `releases.json` | Versions and notes, shown on the site |
+| `copy-motion.json` | Copy Motion's version and notes: shown on the site, and read by the plugin's update notice |
 
 **Releasing:** with everything committed, run
 

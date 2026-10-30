@@ -1816,6 +1816,8 @@ figma.ui.onmessage = msg => {
   if (msg.type === "select") runSelect(msg.ids);
   if (msg.type === "deletePoint") deletePoint(msg.id);
   if (msg.type === "stop") stopRequested = true;
+  // The update notice's link: only ever the toolkit page.
+  if (msg.type === "openToolkit") figma.openExternal("https://hcrocker-sys.github.io/figma-toolkit/");
   // The gallery wants a bigger window; the panel asks, the plugin resizes.
   if (msg.type === "resize") figma.ui.resize(Math.round(msg.w), Math.round(msg.h));
   // The delivery folders setup lives in the file, so whoever opens it gets the

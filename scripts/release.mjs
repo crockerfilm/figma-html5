@@ -1,14 +1,14 @@
 // Publishes a new version of the Copy Motion plugin.
 //
-//   node scripts/release.mjs 1.0.1 "Fixed …" "Added …"
-//   node scripts/release.mjs patch "Fixed …"         (or minor / major)
-//   node scripts/release.mjs patch "Fixed …" --dry-run
+//   node scripts/release.mjs 1.0.2 "One-line summary" "Detail …" "Detail …"
+//   node scripts/release.mjs patch "One-line summary"   (or minor / major)
+//   node scripts/release.mjs patch "One-line summary" --dry-run
 //
 // Stamps the version, rebuilds the plugin, zips it to dist/Copy-Motion.zip,
-// adds the notes to releases.json (the site's "What's new"), then commits,
-// tags, pushes and creates the GitHub release with the zip attached. The
-// site's download button points at the latest release, so it never needs
-// editing. --dry-run stops before anything is committed or published.
+// adds the release to copy-motion.json (the toolkit page's version and "What's
+// new", and what the plugin checks for updates), then commits, tags, pushes
+// and creates the GitHub release with the zip attached. --dry-run stops
+// before anything is committed or published.
 import { readFileSync, writeFileSync, rmSync, mkdirSync, copyFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -21,7 +21,7 @@ const fail = msg => { console.error(`release: ${msg}`); process.exit(1); };
 const args = process.argv.slice(2);
 const dry = args.includes("--dry-run");
 const [want, ...notes] = args.filter(a => a !== "--dry-run");
-if (!want || !notes.length) fail('usage: node scripts/release.mjs <x.y.z | patch | minor | major> "note" ["note" …] [--dry-run]');
+if (!want || !notes.length) fail('usage: node scripts/release.mjs <x.y.z | patch | minor | major> "summary" ["detail" …] [--dry-run]');
 
 const current = readFileSync(join(root, "VERSION"), "utf8").trim();
 const [M, m, p] = current.split(".").map(Number);
@@ -46,25 +46,28 @@ mkdirSync(folder, { recursive: true });
 for (const f of ["manifest.json", "code.js", "ui.html", "README.md"]) copyFileSync(join(root, "figma-plugin", f), join(folder, f));
 sh("zip", ["-qrX", "Copy-Motion.zip", "Copy Motion"], { cwd: dist });
 
-// 3. What's new, newest first.
-const listFile = join(root, "releases.json");
-const list = JSON.parse(readFileSync(listFile, "utf8")).filter(r => r.version !== version);
+// 3. The version file: newest first, in the same shape as Static Recompose's.
+const listFile = join(root, "copy-motion.json");
+const info = JSON.parse(readFileSync(listFile, "utf8"));
 const d = new Date(), date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-list.unshift({ version, date, notes });
-writeFileSync(listFile, JSON.stringify(list, null, 2) + "\n");
+const [summary, ...details] = notes;
+const history = [{ version, date, summary, notes: details }].concat((info.history || []).filter(r => r.version !== version));
+writeFileSync(listFile, JSON.stringify({ version, date, summary,
+  download: `https://github.com/hcrocker-sys/figma-toolkit/releases/download/${tag}/Copy-Motion.zip`, history }, null, 2) + "\n");
 
 if (dry) {
   console.log(`Dry run: ${tag} built to dist/Copy-Motion.zip. Nothing committed or published.`);
-  console.log("Undo the stamp with: git checkout VERSION releases.json figma-plugin/ui.html");
+  console.log("Undo the stamp with: git checkout VERSION copy-motion.json figma-plugin/ui.html");
   process.exit(0);
 }
 
 // 4. Commit, tag, push (Pages publishes from main), release.
-sh("git", ["add", "VERSION", "releases.json", "figma-plugin/ui.html"]);
+sh("git", ["add", "VERSION", "copy-motion.json", "figma-plugin/ui.html"]);
 sh("git", ["commit", "-m", `Release ${tag}`]);
 sh("git", ["tag", tag]);
 const branch = sh("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
 sh("git", ["push", "origin", ...(branch === "main" ? ["main"] : [branch, "HEAD:main"]), tag]);
-sh("gh", ["release", "create", tag, join(dist, "Copy-Motion.zip"), "--title", `Copy Motion ${tag}`,
-          "--notes", notes.map(n => `- ${n}`).join("\n")]);
+// The tag is pushed above, so the release is made on this commit.
+sh("gh", ["release", "create", tag, join(dist, "Copy-Motion.zip"), "--verify-tag", "--title", `Copy Motion ${tag}`,
+          "--notes", [summary, ...details.map(n => `- ${n}`)].join("\n\n")]);
 console.log(`Released ${tag}: ${sh("gh", ["release", "view", tag, "--json", "url", "--jq", ".url"])}`);

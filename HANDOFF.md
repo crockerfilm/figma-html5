@@ -6,20 +6,24 @@ it says so — please preserve those hedges rather than hardening them into clai
 
 ---
 
-## 0. Current layout (2026-10-30, v1.0.0)
+## 0. Current layout (2026-10-30, v1.1.0)
 
 The web converter page is gone; the Figma plugin replaced it. What's where now:
 
 - **Converter (the plugin's engine):** `figma-plugin/src/converter.js` — moved verbatim
   from `index.html`'s `@converter` block. `SPEC` lives at its top. Everything below about
   "index.html" as the converter means this file.
-- **Site** (GitHub Pages from `main`): `index.html` is the plugin's download/install page
-  (version and notes from `releases.json`), `preview.html` is *Check a delivery* (it took
+- **Repo and site:** `hcrocker-sys/figma-toolkit` (moved from `crockerfilm/figma-html5`),
+  GitHub Pages from `main` at https://hcrocker-sys.github.io/figma-toolkit/. Styled to match
+  Static Recompose (`hcrocker-sys/static-recompose`, a separate plugin worked on separately).
+- **Site:** `index.html` is the Figma Toolkit page: download cards for Copy Motion (version
+  and notes from `copy-motion.json`) and Static Recompose (from its own `version.json`), `preview.html` is *Check a delivery* (it took
   over the old Inspect tab's checks), `gwd.html` is the GWD clickTag tool, moved here from
   the separate `gwd-clicktag` repo (whose page now redirects).
 - **Versions:** `VERSION` is stamped into the plugin footer by `build.mjs`;
-  `scripts/release.mjs` builds, zips and publishes a GitHub release. The site's download
-  button points at the latest release.
+  `scripts/release.mjs` builds, zips, updates `copy-motion.json` and publishes a GitHub
+  release. The plugin reads `copy-motion.json` from the toolkit page to show an update
+  notice: that is its only network access (manifest `allowedDomains`).
 
 ## 1. What this is
 

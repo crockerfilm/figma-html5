@@ -1,0 +1,25 @@
+{
+  "version": "1.0.1",
+  "date": "2026-10-30",
+  "summary": "Marked as in development: check every banner yourself before delivering it.",
+  "download": "https://github.com/hcrocker-sys/figma-toolkit/releases/download/v1.0.1/Copy-Motion.zip",
+  "history": [
+    {
+      "version": "1.0.1",
+      "date": "2026-10-30",
+      "summary": "Marked as in development: check every banner yourself before delivering it.",
+      "notes": []
+    },
+    {
+      "version": "1.0.0",
+      "date": "2026-10-30",
+      "summary": "First versioned release.",
+      "notes": [
+        "Only ever works on the page you're on; locked layers and main components are left alone.",
+        "Banners edited in Figma after building are marked to build again.",
+        "More Figma Motion settings convert correctly, and unknown ones are flagged.",
+        "Warns when a banner ends blank or back on its first frame."
+      ]
+    }
+  ]
+}

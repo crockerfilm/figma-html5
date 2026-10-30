@@ -52,13 +52,13 @@
 </script>
 <style>
   :root {
-    --bg: #0d0f14; --panel: #151923; --panel-2: #1c2130; --line: #262c3b;
-    --text: #e6e9f0; --muted: #8b93a7; --accent: #5b8cff;
-    --ok: #3ecf8e; --fix: #5b8cff; --warn: #f5a623; --block: #ff5c5c;
+    --bg: #1b1b1d; --panel: #242427; --panel-2: #2c2c30; --line: #37373c;
+    --text: #ececec; --muted: #9a9aa2; --accent: #4f8fe0; --accent2: #9fd0ff;
+    --ok: #7ee0a6; --fix: #9fd0ff; --warn: #ffce6b; --block: #ff8a80;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    font: 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; -webkit-font-smoothing: antialiased; }
   .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 24px 120px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
   .sub { color: var(--muted); margin: 0 0 22px; max-width: 760px; }
@@ -81,7 +81,7 @@
 
   #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 40px 24px;
     text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
-  #drop.over { border-color: var(--accent); background: rgba(91,140,255,.07); }
+  #drop.over { border-color: var(--accent); background: rgba(79,143,224,.07); }
   #drop.busy { opacity: .6; pointer-events: none; }
   #drop strong { display: block; font-size: 16px; margin-bottom: 6px; }
   #drop span { color: var(--muted); }
@@ -99,8 +99,8 @@
 
   .verdict { display: flex; align-items: center; gap: 14px; padding: 14px 18px; flex-wrap: wrap;
     border-radius: 9px; margin-bottom: 18px; border: 1px solid var(--line); background: var(--panel); }
-  .verdict.ok { background: rgba(62,207,142,.08); border-color: rgba(62,207,142,.35); }
-  .verdict.no { background: rgba(255,92,92,.08); border-color: rgba(255,92,92,.35); }
+  .verdict.ok { background: rgba(126,224,166,.08); border-color: rgba(126,224,166,.35); }
+  .verdict.no { background: rgba(255,138,128,.08); border-color: rgba(255,138,128,.35); }
   .verdict b { font-size: 16px; display: block; }
   .verdict p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
 
@@ -110,7 +110,7 @@
   .problems .file { font-weight: 600; }
   .problems .grp { color: var(--muted); }
   .problems .nfail { color: var(--block); font-size: 12px; margin-left: 6px; }
-  .problems .pb { margin: 7px 0 0 14px; padding-left: 10px; border-left: 2px solid rgba(255,92,92,.45); }
+  .problems .pb { margin: 7px 0 0 14px; padding-left: 10px; border-left: 2px solid rgba(255,138,128,.45); }
   .problems .chk { color: var(--text); font-weight: 600; display: block; }
   .problems .why { color: var(--muted); display: block; word-break: break-word; }
   .problems .fixline { color: var(--text); display: block; font-size: 12.5px; margin-top: 2px; }
@@ -129,19 +129,19 @@
   table.grid tr.item:hover td { background: rgba(255,255,255,.02); }
   table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
   .g { display: inline-block; width: 20px; height: 20px; line-height: 20px; border-radius: 5px; font-size: 12px; font-weight: 700; }
-  .g.pass { background: rgba(62,207,142,.15); color: var(--ok); }
-  .g.fail { background: rgba(255,92,92,.18); color: var(--block); }
-  .g.warn { background: rgba(245,166,35,.16); color: var(--warn); }
+  .g.pass { background: rgba(126,224,166,.15); color: var(--ok); }
+  .g.fail { background: rgba(255,138,128,.18); color: var(--block); }
+  .g.warn { background: rgba(255,206,107,.16); color: var(--warn); }
   .g.info { background: rgba(139,147,167,.12); color: var(--muted); }
   .g.pending { background: transparent; color: var(--muted); }
   .g.pending::after { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
     border: 2px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; vertical-align: -1px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .pill { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 3px 8px; border-radius: 4px; white-space: nowrap; }
-  .pill.pass { background: rgba(62,207,142,.15); color: var(--ok); }
-  .pill.fail { background: rgba(255,92,92,.15); color: var(--block); }
-  .pill.run { background: rgba(91,140,255,.15); color: var(--fix); }
-  .pill.warn { background: rgba(245,166,35,.15); color: var(--warn); }
+  .pill.pass { background: rgba(126,224,166,.15); color: var(--ok); }
+  .pill.fail { background: rgba(255,138,128,.15); color: var(--block); }
+  .pill.run { background: rgba(79,143,224,.15); color: var(--fix); }
+  .pill.warn { background: rgba(255,206,107,.15); color: var(--warn); }
   .dl { background: none; border: 1px solid var(--line); color: var(--text); padding: 4px 8px; font-size: 12px; border-radius: 6px; }
   .dl + .dl { margin-left: 4px; }
 
@@ -153,13 +153,13 @@
   .rule:first-of-type { border-top: 0; }
   .tag { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .05em; padding: 2px 7px;
     border-radius: 4px; margin-top: 2px; min-width: 46px; text-align: center; height: fit-content; }
-  .tag.pass { background: rgba(62,207,142,.15); color: var(--ok); }
-  .tag.fail { background: rgba(255,92,92,.15); color: var(--block); }
-  .tag.warn { background: rgba(245,166,35,.15); color: var(--warn); }
+  .tag.pass { background: rgba(126,224,166,.15); color: var(--ok); }
+  .tag.fail { background: rgba(255,138,128,.15); color: var(--block); }
+  .tag.warn { background: rgba(255,206,107,.15); color: var(--warn); }
   .tag.info, .tag.pending { background: rgba(139,147,167,.15); color: var(--muted); }
-  .tag.removed { background: rgba(255,92,92,.12); color: #ff8a8a; }
-  .tag.added { background: rgba(62,207,142,.12); color: var(--ok); }
-  .tag.rewired, .tag.fixed { background: rgba(91,140,255,.15); color: var(--fix); }
+  .tag.removed { background: rgba(255,138,128,.12); color: #ff8a8a; }
+  .tag.added { background: rgba(126,224,166,.12); color: var(--ok); }
+  .tag.rewired, .tag.fixed { background: rgba(79,143,224,.15); color: var(--fix); }
   .rule b { font-weight: 600; font-size: 13px; }
   .rule p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; word-break: break-word; }
   .rule .todo { color: var(--text); background: var(--panel); border-left: 2px solid var(--block);
@@ -202,21 +202,22 @@
   .site b { margin-right: 14px; font-size: 14px; }
   .site a { color: var(--muted); text-decoration: none; padding: 5px 10px; border-radius: 6px; font-size: 13px; }
   .site a:hover, .site a.on { color: var(--text); background: var(--panel-2); }
-  /* In development: shown on every page. */
-  .dev { border: 1px solid rgba(245,166,35,.5); background: rgba(245,166,35,.1);
-    color: var(--text); border-radius: 10px; padding: 12px 16px; margin: 0 0 22px; font-size: 14px; line-height: 1.5; }
-  .dev b { color: var(--warn); }
+  /* In development: the toolkit's notice, as on its home page. */
+  .beta{display:flex;gap:12px;align-items:flex-start;background:#3a2f1e;border:1px solid #6b5426;color:#ffce6b;
+    border-radius:12px;padding:14px 16px;margin:0 0 18px;font-size:14px;line-height:1.5}
+  .beta svg{flex:none;margin-top:2px}
+  .beta b{color:#ffe2a8}
 </style>
 </head>
 <body>
 <nav class="site"><div class="in">
-  <b>Copy Motion</b>
-  <a href="./">Plugin</a>
+  <b>Figma Toolkit</b>
+  <a href="./">Plugins</a>
   <a href="preview.html">Check a delivery</a>
   <a class="on" href="gwd.html">GWD clickTag</a>
 </div></nav>
 <div class="wrap">
-  <div class="dev" role="note"><b>In development.</b> This is an internal tool that's still being tested, and its checks can miss things. Check every converted banner yourself before you deliver it: playback, click-through and file sizes, against the placement's own specs. Provided as is, with no guarantee.</div>
+  <div class="beta" role="note"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M9 1.5 17 16H1L9 1.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 7v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="9" cy="13.2" r=".9" fill="currentColor"/></svg><div><b>Still in development.</b> This is an internal tool that's still being tested, and its checks can miss things. Check every converted banner yourself before you deliver it: playback, click-through and file sizes, against the placement's own specs. Provided as is, with no guarantee.</div></div>
   <h1>GWD → IAB clickTag Converter</h1>
   <p class="sub">Drop Google Web Designer banner zips (or folders, or a zip of zips). Each banner is converted to the standard IAB clickTag format with no hardcoded URLs, then loaded in a real browser frame and run through <span class="nchecks"></span> checks.</p>
 

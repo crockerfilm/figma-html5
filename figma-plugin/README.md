@@ -19,7 +19,8 @@ undone (see Safety net). Hidden layers are listed
 but left unticked. The selected hero is never changed, and a layer is skipped when its
 parent already receives the same animation, so nested same-named frames don't double up.
 
-Runs entirely inside Figma, with network access set to none.
+Runs inside Figma. Its only network access is reading the toolkit's version file, to say
+when a newer version is out; nothing about your design is sent.
 
 ## Install (once)
 
@@ -29,7 +30,8 @@ in the Figma desktop app: **Plugins → Development → Import plugin from manif
 
 ## Update
 
-Download the latest from https://crockerfilm.github.io/figma-html5/ and replace the files in
+When a newer version is out, a blue notice at the top of the panel says so. Download it
+from https://hcrocker-sys.github.io/figma-toolkit/ and replace the files in
 this folder with the new ones. No need to import again: Figma reads the folder each time
 the plugin runs. The panel's footer shows the version.
 

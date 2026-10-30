@@ -1423,6 +1423,10 @@ function renderExport(msg) {
   });
   head.appendChild(pick);
   card.appendChild(head);
+  // Said where the output is made: the checks help, they don't sign anything off.
+  const dev = el("div", "muted", "In development: check every banner yourself before delivering it (playback, end frame, click, sizes, backup).");
+  dev.style.cssText = "font-size:11px;margin:2px 0 4px;color:var(--figma-color-text-warning)";
+  card.appendChild(dev);
   card.appendChild(exportAllToggle());
   // Copies an export left behind when it was cut short (Figma closed mid-build).
   if (msg.leftovers && msg.leftovers.length) {
@@ -2102,6 +2106,7 @@ async function packageDownload() {
   save.style.cssText = "display:inline-block;margin-top:6px;font-weight:600;color:var(--figma-color-text-brand)";
   card.appendChild(save);
   card.appendChild(el("div", "muted", "It saves to your Downloads folder. If nothing appeared there, click the link above."));
+  card.appendChild(el("div", "warn", "Before delivering: open the banners and check each one yourself. This tool is in development and its checks can miss things."));
   if (layout) {
     const rep = el("a", null, "Save the report (.csv)");
     rep.href = keepUrl(URL.createObjectURL(new Blob([report], { type: "text/csv" }))); rep.download = fileName.replace(/\.zip$/, "_report.csv");

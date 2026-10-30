@@ -66,6 +66,10 @@
   .site b { margin-right: 14px; font-size: 14px; }
   .site a { color: var(--muted); text-decoration: none; padding: 5px 10px; border-radius: 6px; font-size: 13px; }
   .site a:hover, .site a.on { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+  /* In development: shown on every page. */
+  .dev { border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent);
+    color: var(--text); border-radius: 10px; padding: 12px 16px; margin: 0 0 22px; font-size: 14px; line-height: 1.5; }
+  .dev b { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -76,6 +80,7 @@
   <a href="gwd.html">GWD clickTag</a>
 </div></nav>
 <main>
+  <div class="dev" role="note"><b>In development.</b> This is an internal tool that's still being tested, and its checks can miss things. A clean result here doesn't mean a delivery is right: check every banner yourself, against the placement's own specs. Provided as is, with no guarantee.</div>
   <h1>Check a delivery</h1>
   <p class="sub">Drop a delivery zip, banner zips or a folder: every banner plays beside its backup image, with its weight, length, click and package checked. Works for Figma and Google Web Designer banners. Everything stays on your computer.</p>
   <div id="drop"><b>Drop zips or a folder here</b><span>or click to choose files. A delivery zip of folders, a zip of zips, banner zips, or unzipped banner folders all work.</span></div>

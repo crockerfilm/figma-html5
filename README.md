@@ -1,8 +1,12 @@
 # Copy Motion
 
-A Figma plugin that copies animation across a banner suite, then exports every banner as
-an ad-ready HTML5 zip with its backup image, built to Google's display specs (DV360,
-Campaign Manager 360, Ad Manager).
+> **In development.** An internal tool that's still being tested; its checks can miss
+> things. Check every banner yourself before delivering it, against the placement's own
+> specs. Provided as is, without warranty.
+
+A Figma plugin that copies animation across a banner suite, then exports each banner as
+an HTML5 zip with its backup image, aiming at Google's display specs (DV360, Campaign
+Manager 360, Ad Manager).
 
 **→ [Download and install](https://crockerfilm.github.io/figma-html5/)**
 

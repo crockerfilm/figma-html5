@@ -1,5 +1,8 @@
 # Copy Motion (Figma plugin)
 
+> **In development.** Still being tested, and its checks can miss things. Check every
+> banner yourself before delivering it. Provided as is, without warranty.
+
 Animate one banner with Figma Motion, then copy that animation to every layer on the
 page that shows the same thing. Layers are matched by what they show, not by their name:
 

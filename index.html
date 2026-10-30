@@ -46,6 +46,10 @@
   .rel b { font-size: 15px; } .rel span { color: var(--muted); font-size: 13px; margin-left: 8px; }
   .rel ul { margin-top: 4px; }
   footer { color: var(--muted); font-size: 13px; margin-top: 28px; }
+  /* In development: shown on every page. */
+  .dev { border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent);
+    color: var(--text); border-radius: 10px; padding: 12px 16px; margin: 0 0 22px; font-size: 14px; line-height: 1.5; }
+  .dev b { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -56,9 +60,10 @@
   <a href="gwd.html">GWD clickTag</a>
 </div></nav>
 <main>
-  <h1>Figma banners to HTML5, ready to deliver</h1>
-  <p class="lede">A Figma plugin that copies animation across a banner suite, then exports every banner as an
-    ad-ready HTML5 zip with its backup image, built to Google's display specs.</p>
+  <div class="dev" role="note"><b>In development.</b> This is an internal tool that's still being tested, and its checks can miss things. Check every banner yourself before you deliver it: playback, end frame, click-through, file sizes and backup image, against the placement's own specs. Provided as is, with no guarantee.</div>
+  <h1>Figma banners to HTML5</h1>
+  <p class="lede">A Figma plugin that copies animation across a banner suite, then exports each banner as an
+    HTML5 zip with its backup image, aiming at Google's display specs.</p>
 
   <section class="panel">
     <div class="get">
@@ -91,9 +96,9 @@
     <h2>What it does</h2>
     <ul>
       <li><b>Copy animation</b> from one hero banner to every banner that shows the same thing: same copy, same image or same component, at every size. Previewed first, with a restore point before every change.</li>
-      <li><b>Export HTML5</b>: one zip per banner with an empty clickTag for the ad server, under 150 KB, animation that stops within 15 s, and a backup JPG under 50 KB beside it.</li>
+      <li><b>Export HTML5</b>: one zip per banner with an empty clickTag for the ad server, aiming for under 150 KB, animation that stops within 15 s, and a backup JPG under 50 KB beside it.</li>
       <li><b>Preview</b> every banner playing side by side before you download, with each one's checks.</li>
-      <li><b>Delivery folders</b>: give each version a code and the download comes out named and organised, ready to send.</li>
+      <li><b>Delivery folders</b>: give each version a code and the download comes out named and organised.</li>
     </ul>
     <p class="note">It only ever reads and changes the page you're on, and it only changes animation: layers are never moved, edited or deleted. Export works on a temporary copy, so your banners aren't touched. No network access: nothing leaves Figma.</p>
   </section>
@@ -113,7 +118,7 @@
     <div id="releases"></div>
   </section>
 
-  <footer>Check a finished delivery on <a href="preview.html">Check a delivery</a>. Converting Google Web Designer banners? Use <a href="gwd.html">GWD clickTag</a>. These pages run in your browser; nothing is uploaded.</footer>
+  <footer>Check a finished delivery on <a href="preview.html">Check a delivery</a>. Converting Google Web Designer banners? Use <a href="gwd.html">GWD clickTag</a>. These pages run in your browser; nothing is uploaded. Copy Motion is in development and provided as is, without warranty: check all output yourself before delivering it.</footer>
 </main>
 <script>
 "use strict";

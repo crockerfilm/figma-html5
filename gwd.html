@@ -202,6 +202,10 @@
   .site b { margin-right: 14px; font-size: 14px; }
   .site a { color: var(--muted); text-decoration: none; padding: 5px 10px; border-radius: 6px; font-size: 13px; }
   .site a:hover, .site a.on { color: var(--text); background: var(--panel-2); }
+  /* In development: shown on every page. */
+  .dev { border: 1px solid rgba(245,166,35,.5); background: rgba(245,166,35,.1);
+    color: var(--text); border-radius: 10px; padding: 12px 16px; margin: 0 0 22px; font-size: 14px; line-height: 1.5; }
+  .dev b { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -212,6 +216,7 @@
   <a class="on" href="gwd.html">GWD clickTag</a>
 </div></nav>
 <div class="wrap">
+  <div class="dev" role="note"><b>In development.</b> This is an internal tool that's still being tested, and its checks can miss things. Check every converted banner yourself before you deliver it: playback, click-through and file sizes, against the placement's own specs. Provided as is, with no guarantee.</div>
   <h1>GWD → IAB clickTag Converter</h1>
   <p class="sub">Drop Google Web Designer banner zips (or folders, or a zip of zips). Each banner is converted to the standard IAB clickTag format with no hardcoded URLs, then loaded in a real browser frame and run through <span class="nchecks"></span> checks.</p>
 
